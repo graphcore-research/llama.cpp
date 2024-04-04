@@ -76,6 +76,7 @@
 #include <fstream>
 #include <functional>
 #include <initializer_list>
+#include <iostream>
 #include <locale>
 #include <map>
 #include <memory>
@@ -106,6 +107,46 @@
 
 #define LLAMA_MAX_NODES   8192
 #define LLAMA_MAX_EXPERTS 8
+
+
+//
+// measure and log the time to run operations
+//
+// === EXAMPLE USE ===
+// startLoggingTimer("filename.txt", "ExampleTimer1");
+// // run some code here
+// endLoggingTimer("ExampleTimer1");
+//
+class LoggingTimer {
+private:
+    std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
+    std::ofstream logFile;
+    std::string id;
+
+public:
+    LoggingTimer(const std::string& fileName, const std::string& id) : id(id) {
+        startTime = std::chrono::high_resolution_clock::now();
+        logFile.open(fileName, std::ios_base::app);
+        if (!logFile.is_open()) {
+            std::cerr << "Failed to open log file for writing!\n";
+        }
+    }
+
+    ~LoggingTimer() {
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto duration = 1e6 * std::chrono::duration_cast<std::chrono::duration<double>>(endTime - startTime).count();
+
+        if (logFile.is_open()) {
+            logFile << "Execution time: " << duration << " microseconds\n";
+            logFile.close();
+        }
+    }
+};
+
+std::unordered_map<std::string, LoggingTimer*> timers;
+
+#define startLoggingTimer(fileName, id) timers[id] = new LoggingTimer(fileName, id);
+#define endLoggingTimer(id) do { delete timers[id]; timers.erase(id); } while(0)
 
 
 //
@@ -6317,8 +6358,10 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
 
+
             // self-attention
             {
+
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
@@ -6358,7 +6401,9 @@ struct llm_build_context {
                 cur = llm_build_kv(ctx0, model, hparams, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
                         Kcur, Vcur, Qcur, KQ_mask, nullptr, n_ctx, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
+
             }
+
 
             if (il == n_layer - 1) {
                 // skip computing output for unused tokens
