@@ -2452,6 +2452,15 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     cache.used = 0;
 }
 
+static void llama_kv_cache_clear_final_token(struct llama_kv_cache & cache) {
+    for (int32_t i = (int32_t) cache.size - 1; i < (int32_t) cache.size; ++i) {
+        cache.cells[i].pos = -1;
+        cache.cells[i].seq_id.clear();
+    }
+    // cache.head = 0;
+    // cache.used = 0;
+}
+
 static bool llama_kv_cache_seq_rm(
         struct llama_kv_cache & cache,
                  llama_seq_id   seq_id,

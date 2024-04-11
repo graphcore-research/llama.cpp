@@ -562,7 +562,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_prompt,
-                /* .n_gen        = */ 0,
+                /* .n_gen        = */ 1,
                 /* .n_batch      = */ nb,
                 /* .n_ubatch     = */ nub,
                 /* .type_k       = */ tk,
@@ -1168,6 +1168,7 @@ static void llama_null_log_callback(enum ggml_log_level level, const char * text
     (void) user_data;
 }
 
+
 int main(int argc, char ** argv) {
     // try to set locale for unicode characters in markdown
     setlocale(LC_CTYPE, ".UTF-8");
@@ -1212,7 +1213,6 @@ int main(int argc, char ** argv) {
             exit(1);
     }
     p->fout = stdout;
-    p->print_header(params);
 
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
@@ -1249,36 +1249,33 @@ int main(int argc, char ** argv) {
         if (t.n_prompt > 0) {
             //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
             test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-        }
-        if (t.n_gen > 0) {
-            test_gen(ctx, 1, 0, t.n_threads);
-        }
-
-        for (int i = 0; i < params.reps; i++) {
-            llama_kv_cache_clear(ctx);
-
-            uint64_t t_start = get_time_ns();
-            if (t.n_prompt > 0) {
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-            }
             if (t.n_gen > 0) {
-                test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+                test_gen(ctx, 1, 0, t.n_threads);
             }
 
-            uint64_t t_ns = get_time_ns() - t_start;
-            t.samples_ns.push_back(t_ns);
+            for (int i = 0; i < params.reps; i++) {
+                llama_kv_cache_clear(ctx);
+                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+
+                uint64_t t_start = get_time_ns();
+                if (t.n_gen > 0) {
+                    test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+                }
+
+                uint64_t t_ns = get_time_ns() - t_start;
+                printf("n_prompt = %d: %6.9lf\n", t.n_prompt, t_ns * 1e-9);
+                
+                printf()
+                t.samples_ns.push_back(t_ns);
+            }
         }
 
-        p->print_test(t);
-
-        llama_print_timings(ctx);
 
         llama_free(ctx);
     }
 
     llama_free_model(lmodel);
 
-    p->print_footer();
 
     llama_backend_free();
 
