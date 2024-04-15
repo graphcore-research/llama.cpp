@@ -2452,13 +2452,13 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     cache.used = 0;
 }
 
-static void llama_kv_cache_clear_final_token(struct llama_kv_cache & cache) {
-    for (int32_t i = (int32_t) cache.size - 1; i < (int32_t) cache.size; ++i) {
+static void llama_kv_cache_clear_tg_tokens(struct llama_kv_cache & cache, int start) {
+    for (int32_t i = start; i < (int32_t) cache.size; ++i) {
         cache.cells[i].pos = -1;
         cache.cells[i].seq_id.clear();
     }
-    // cache.head = 0;
-    // cache.used = 0;
+    cache.head = 0;
+    cache.used = 0;
 }
 
 static bool llama_kv_cache_seq_rm(
@@ -14869,6 +14869,10 @@ int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx) {
 
 void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
+}
+
+void llama_kv_cache_clear_tg_tokens(struct llama_context * ctx, int start) {
+    llama_kv_cache_clear_tg_tokens(ctx->kv_self, start);
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
