@@ -722,6 +722,7 @@ struct test {
         }
 
         return "CPU";
+        // return GGML_CUDA_NAME;
     }
 
     static const std::vector<std::string> & get_fields() {
