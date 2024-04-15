@@ -9,7 +9,9 @@
 #include <cstring>
 #include <ctime>
 #include <cstdlib>
+#include <fstream>
 #include <iterator>
+#include <iostream>
 #include <map>
 #include <numeric>
 #include <regex>
@@ -1244,18 +1246,22 @@ int main(int argc, char ** argv) {
         test t(inst, lmodel, ctx);
 
         llama_kv_cache_clear(ctx);
-
-        // warmup run
+        std::ofstream logFile("timing-benchmarks/llama-7B-Q8_0.txt", std::ios_base::app);
         if (t.n_prompt > 0) {
             //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-            test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+            // Warmup run (not sure if this is really doing much...)
             if (t.n_gen > 0) {
                 test_gen(ctx, 1, 0, t.n_threads);
             }
+            
+            llama_kv_cache_clear(ctx);
+
+            uint64_t prompt_t_start = get_time_ns();
+            test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+            uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
+            printf("Time to generate prompt: %6.9lf seconds\n", prompt_t_ns * 1e-9);
 
             for (int i = 0; i < params.reps; i++) {
-                llama_kv_cache_clear(ctx);
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
 
                 uint64_t t_start = get_time_ns();
                 if (t.n_gen > 0) {
@@ -1263,10 +1269,24 @@ int main(int argc, char ** argv) {
                 }
 
                 uint64_t t_ns = get_time_ns() - t_start;
-                printf("n_prompt = %d: %6.9lf\n", t.n_prompt, t_ns * 1e-9);
-                
-                printf()
                 t.samples_ns.push_back(t_ns);
+
+                logFile.open("timing-benchmarks/llama-7B-Q8_0.txt", std::ios_base::app);
+                if (logFile.is_open()) {
+                    logFile << "n_prompt = " << t.n_prompt << ": " << t_ns * 1e-9 << "\n";
+                    logFile.close();
+                }
+
+                auto kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+                printf(
+                    "    Repeat %d, n_prompt = %d, token_count = %d: %6.9lf seconds\n", 
+                    i, 
+                    t.n_prompt, 
+                    kv_cache_token_count, 
+                    t_ns * 1e-9
+                );
+
+                llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
             }
         }
 
