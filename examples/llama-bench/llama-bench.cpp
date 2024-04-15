@@ -1246,7 +1246,7 @@ int main(int argc, char ** argv) {
         test t(inst, lmodel, ctx);
 
         llama_kv_cache_clear(ctx);
-        std::ofstream logFile("timing-benchmarks/llama-7B-Q8_0.txt", std::ios_base::app);
+        std::ofstream logFile("timing-benchmarks/gpu-llama-7B-Q8_0.txt", std::ios_base::app);
         if (t.n_prompt > 0) {
             //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
             // Warmup run (not sure if this is really doing much...)
@@ -1271,7 +1271,7 @@ int main(int argc, char ** argv) {
                 uint64_t t_ns = get_time_ns() - t_start;
                 t.samples_ns.push_back(t_ns);
 
-                logFile.open("timing-benchmarks/llama-7B-Q8_0.txt", std::ios_base::app);
+                logFile.open("timing-benchmarks/gpu-llama-7B-Q8_0.txt", std::ios_base::app);
                 if (logFile.is_open()) {
                     logFile << "n_prompt = " << t.n_prompt << ": " << t_ns * 1e-9 << "\n";
                     logFile.close();
