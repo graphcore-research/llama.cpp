@@ -456,6 +456,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
+        } else if (arg == "-f" || arg == "--filename") {
+            ++i; // ignore this, deal with it later in the script (for now...)
         } else {
             invalid_param = true;
             break;
@@ -1222,6 +1224,24 @@ int main(int argc, char ** argv) {
     llama_model * lmodel = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
 
+    std::string log_filename;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-f" || arg == "--filename") {
+            if (i + 1 < argc) {
+                log_filename = argv[i + 1];
+                break;
+            } else {
+                std::cerr << "Error: Argument 'filename' requires a value." << std::endl;
+                return 1;
+            }
+        }
+    }
+
+    // std::cout << "Filename: " << log_filename << std::endl;
+
+
+
     for (const auto & inst : params_instances) {
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
@@ -1247,7 +1267,14 @@ int main(int argc, char ** argv) {
         test t(inst, lmodel, ctx);
 
         llama_kv_cache_clear(ctx);
-        std::ofstream logFile("timing-benchmarks/gpu-llama-7B-Q8_0.txt", std::ios_base::app);
+
+        std::string log_directory = "timing-benchmarks/" + log_filename + ".txt";
+        std::ofstream logFile(log_directory, std::ios_base::app);
+        logFile.open(log_directory, std::ios_base::app);
+        if (logFile.is_open()) {
+            logFile.close();
+        }
+
         if (t.n_prompt > 0) {
             //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
             // Warmup run (not sure if this is really doing much...)
@@ -1272,7 +1299,7 @@ int main(int argc, char ** argv) {
                 uint64_t t_ns = get_time_ns() - t_start;
                 t.samples_ns.push_back(t_ns);
 
-                logFile.open("timing-benchmarks/gpu-llama-7B-Q8_0.txt", std::ios_base::app);
+                logFile.open(log_directory, std::ios_base::app);
                 if (logFile.is_open()) {
                     logFile << "n_prompt = " << t.n_prompt << ": " << t_ns * 1e-9 << "\n";
                     logFile.close();
