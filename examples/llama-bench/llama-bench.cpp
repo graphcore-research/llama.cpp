@@ -1242,53 +1242,171 @@ int main(int argc, char ** argv) {
 
 
 
-    for (const auto & inst : params_instances) {
-        // keep the same model between tests when possible
-        if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
-            if (lmodel) {
-                llama_free_model(lmodel);
-            }
+    // for (const auto & inst : params_instances) {
+    //     // keep the same model between tests when possible
+    //     if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
+    //         if (lmodel) {
+    //             llama_free_model(lmodel);
+    //         }
 
-            lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
-            if (lmodel == NULL) {
-                fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
-                return 1;
-            }
-            prev_inst = &inst;
+    //         lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
+    //         if (lmodel == NULL) {
+    //             fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+    //             return 1;
+    //         }
+    //         prev_inst = &inst;
+    //     }
+
+    //     llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
+    //     if (ctx == NULL) {
+    //         fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
+    //         llama_free_model(lmodel);
+    //         return 1;
+    //     }
+
+    //     test t(inst, lmodel, ctx);
+
+    //     llama_kv_cache_clear(ctx);
+
+    //     std::string log_directory = "timing-benchmarks/" + log_filename + ".txt";
+    //     std::ofstream logFile(log_directory, std::ios_base::app);
+    //     logFile.open(log_directory, std::ios_base::app);
+    //     if (logFile.is_open()) {
+    //         logFile.close();
+    //     }
+
+    //     if (t.n_prompt > 0) {
+    //         //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
+    //         // Warmup run (not sure if this is really doing much...)
+    //         if (t.n_gen > 0) {
+    //             test_gen(ctx, 1, 0, t.n_threads);
+    //         }
+            
+    //         llama_kv_cache_clear(ctx);
+
+    //         uint64_t prompt_t_start = get_time_ns();
+    //         test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+    //         uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
+    //         printf("Time to generate prompt: %6.9lf seconds\n", prompt_t_ns * 1e-9);
+
+    //         for (int i = 0; i < params.reps; i++) {
+
+    //             uint64_t t_start = get_time_ns();
+    //             if (t.n_gen > 0) {
+    //                 test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+    //             }
+
+    //             uint64_t t_ns = get_time_ns() - t_start;
+    //             t.samples_ns.push_back(t_ns);
+
+    //             logFile.open(log_directory, std::ios_base::app);
+    //             if (logFile.is_open()) {
+    //                 logFile << "n_prompt = " << t.n_prompt << ": " << t_ns * 1e-9 << "\n";
+    //                 logFile.close();
+    //             }
+
+    //             auto kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+    //             printf(
+    //                 "    Repeat %d, n_prompt = %d, token_count = %d: %6.9lf seconds\n", 
+    //                 i, 
+    //                 t.n_prompt, 
+    //                 kv_cache_token_count, 
+    //                 t_ns * 1e-9
+    //             );
+
+    //             llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
+    //         }
+    //     }
+
+
+    //     llama_free(ctx);
+    // }
+
+
+
+
+
+    // Load the first model only, to prevent clearing prompt caches (TODO: Make work with multiple models)
+    const auto & params_inst = params_instances[0];
+    if (!lmodel || !prev_inst || !params_inst.equal_mparams(*prev_inst)) {
+        if (lmodel) {
+            llama_free_model(lmodel);
         }
 
-        llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
-        if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
-            llama_free_model(lmodel);
+        lmodel = llama_load_model_from_file(params_inst.model.c_str(), params_inst.to_llama_mparams());
+        if (lmodel == NULL) {
+            fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params_inst.model.c_str());
             return 1;
         }
+        prev_inst = &params_inst;
+    }
+
+    // Adapt the maximum sequence length to be the max sequence of interest
+    auto llama_params = params_inst.to_llama_cparams();
+    for (const auto & inst : params_instances) {
+        if (llama_params.n_ctx < inst.to_llama_cparams().n_ctx) {
+            llama_params.n_ctx = inst.to_llama_cparams().n_ctx;
+        }
+    }
+
+    llama_context * ctx = llama_new_context_with_model(lmodel, llama_params);
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params_inst.model.c_str());
+        llama_free_model(lmodel);
+        return 1;
+    }
+
+    // Create logging file to save data to
+    std::string log_directory = "timing-benchmarks/" + log_filename + ".txt";
+    std::ofstream logFile(log_directory, std::ios_base::app);
+    logFile.open(log_directory, std::ios_base::app);
+    if (logFile.is_open()) {
+        logFile.close();
+    }
+    
+    // Loop through parameters, generating prompts of desired lengths
+    for (const auto & inst : params_instances) {
+
+        auto kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
 
         test t(inst, lmodel, ctx);
 
-        llama_kv_cache_clear(ctx);
-
-        std::string log_directory = "timing-benchmarks/" + log_filename + ".txt";
-        std::ofstream logFile(log_directory, std::ios_base::app);
-        logFile.open(log_directory, std::ios_base::app);
-        if (logFile.is_open()) {
-            logFile.close();
-        }
-
         if (t.n_prompt > 0) {
-            //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
+
+            // Determine if we need to extend or shorten the prompt
+            kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+            printf("\nCurrent prompt length: %d\n", kv_cache_token_count);
+            if (kv_cache_token_count < t.n_prompt) {
+                auto delta = t.n_prompt - kv_cache_token_count;
+                uint64_t prompt_t_start = get_time_ns();
+                test_prompt(ctx, delta, 0, t.n_batch, t.n_threads);
+                uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
+                kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+                printf(
+                    "Extending prompt length by %d (new prompt length = %d): %6.9lf seconds\n", 
+                    delta, kv_cache_token_count, prompt_t_ns * 1e-9
+                );
+            } else if (kv_cache_token_count > t.n_prompt) {
+                uint64_t prompt_t_start = get_time_ns();
+                llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
+                uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
+                kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+                printf(
+                    "Reduce prompt length to %d: %6.9lf seconds\n", 
+                    kv_cache_token_count, prompt_t_ns * 1e-9
+                );
+            } else {
+                printf("No changes to prompt length required\n");
+            }
+
+
             // Warmup run (not sure if this is really doing much...)
             if (t.n_gen > 0) {
                 test_gen(ctx, 1, 0, t.n_threads);
             }
-            
-            llama_kv_cache_clear(ctx);
+            llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
 
-            uint64_t prompt_t_start = get_time_ns();
-            test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-            uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
-            printf("Time to generate prompt: %6.9lf seconds\n", prompt_t_ns * 1e-9);
-
+            // Run through multiple iterations of the same prompt length
             for (int i = 0; i < params.reps; i++) {
 
                 uint64_t t_start = get_time_ns();
@@ -1318,9 +1436,13 @@ int main(int argc, char ** argv) {
             }
         }
 
+        
 
-        llama_free(ctx);
+        
     }
+
+    llama_free(ctx);
+
 
     llama_free_model(lmodel);
 
