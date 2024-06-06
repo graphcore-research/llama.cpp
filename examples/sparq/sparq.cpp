@@ -25,13 +25,31 @@ std::vector<P> topk(const float *x, int size, int k)
     return x_idxs;
 }
 
+std::vector<P> topk_fast(const float *x, int size, int k)
+{
+    // Create a vector of indices and absolute values
+    std::vector<P> x_idxs;
+    for (int i = 0; i < size; i++)
+        x_idxs.emplace_back(i, std::abs(x[i]));
+
+    if (k >= size)
+    {
+        return x_idxs;
+    }
+
+    std::nth_element(x_idxs.begin(), x_idxs.begin() + k - 1, x_idxs.end(), [](P a, P b)
+                     { return a.second > b.second; });
+    x_idxs.resize(k);
+    return x_idxs;
+}
+
 // K -- (seq_len, head_dim)
 std::vector<float> step1(const float *q, const float *K, int seq_len, int head_dim, int k)
 {
     // Output vector
     std::vector<float> out(seq_len, 0.0);
 
-    std::vector<P> idx = topk(q, head_dim, k);
+    std::vector<P> idx = topk_fast(q, head_dim, k);
     for (int i = 0; i < seq_len; i++)
     {
         for (P p : idx)
@@ -45,19 +63,19 @@ std::vector<float> step1(const float *q, const float *K, int seq_len, int head_d
 }
 
 // K -- (head_dim, seq_len)
-std::vector<float> step1_t(const float *q, const float *K, int seq_len, int head_dim, int k)
+std::vector<float> step1_t(const float *q, const float *K_t, int seq_len, int head_dim, int k)
 {
     // Output vector
     std::vector<float> out(seq_len, 0.0);
 
-    std::vector<P> idx = topk(q, head_dim, k);
+    std::vector<P> idx = topk_fast(q, head_dim, k);
 
     for (P p : idx)
     {
         int j = p.first;
         for (int i = 0; i < seq_len; i++)
         {
-            out[i] += q[j] * K[j * seq_len + i];
+            out[i] += q[j] * K_t[j * seq_len + i];
         }
     }
 
@@ -85,7 +103,7 @@ void sparq(const float *q, const float *K, const float *V,
     std::vector<float> s_hat = step1_t(q, K, seq_len, head_dim, k1);
 
     // Find top-k2 approximate scores
-    std::vector<P> topk_out = topk(s_hat.data(), s_hat.size(), k2);
+    std::vector<P> topk_out = topk_fast(s_hat.data(), s_hat.size(), k2);
 
     // Calculate scores for top-k2, s -- (k2, )
     std::vector<float> s(k2, 0.0);
@@ -101,10 +119,6 @@ void sparq(const float *q, const float *K, const float *V,
     softmax(s);
 
     // Perform weighted sum of values
-    // Comments:
-    // * (!) Pointer aliasing
-    // * Declare that pointer aliasing is not allowed (restrict keyword)
-    // * Compiler might not know V and out are separate in memory
     for (int i = 0; i < k2; i++)
     {
         float w = s[i];
@@ -200,6 +214,6 @@ void test_sparq()
 
 int main()
 {
-    test_sparq();
+    test_step_1(true);
     return 0;
 }
