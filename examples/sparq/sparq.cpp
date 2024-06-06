@@ -1,127 +1,205 @@
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
+#include <algorithm>
+#include <random>
 #include <vector>
-#include "ggml.h"
+#include <chrono>
 
-// Compiler doesn't like missing declaration
-void print_tensor(const ggml_tensor* t);
+using P = std::pair<int, float>;
 
-void print_tensor(const ggml_tensor* t)
+std::vector<P> topk(const float *x, int size, int k)
 {
-    for (int i3 = 0; i3 < t->ne[3]; i3++)
+    // Create a vector of indices and absolute values
+    std::vector<P> x_idxs;
+    for (int i = 0; i < size; i++)
+        x_idxs.emplace_back(i, std::abs(x[i]));
+
+    // Sort the vector based on abs values
+    std::sort(x_idxs.begin(), x_idxs.end(), [](P a, P b)
+              { return a.second > b.second; });
+
+    // Keep only the top k pairs
+    if (k < size)
+        x_idxs.resize(k);
+    return x_idxs;
+}
+
+// K -- (seq_len, head_dim)
+std::vector<float> step1(const float *q, const float *K, int seq_len, int head_dim, int k)
+{
+    // Output vector
+    std::vector<float> out(seq_len, 0.0);
+
+    std::vector<P> idx = topk(q, head_dim, k);
+    for (int i = 0; i < seq_len; i++)
     {
-        for (int i2 = 0; i2 < t->ne[2]; i2++)
+        for (P p : idx)
         {
-            for (int i1 = 0; i1 < t->ne[1]; i1++)
-            {
-                for (int i0 = 0; i0 < t->ne[0]; i0++)
-                {
-                    std::cout << ggml_get_f32_nd(t, i0, i1, i2, i3) << " ";
-                }
-                std::cout << std::endl;
-            }
-            std::cout << std::endl;
+            int j = p.first;
+            out[i] += q[j] * K[i * head_dim + j];
         }
-        std::cout << std::endl;
+    }
+
+    return out;
+}
+
+// K -- (head_dim, seq_len)
+std::vector<float> step1_t(const float *q, const float *K, int seq_len, int head_dim, int k)
+{
+    // Output vector
+    std::vector<float> out(seq_len, 0.0);
+
+    std::vector<P> idx = topk(q, head_dim, k);
+
+    for (P p : idx)
+    {
+        int j = p.first;
+        for (int i = 0; i < seq_len; i++)
+        {
+            out[i] += q[j] * K[j * seq_len + i];
+        }
+    }
+
+    return out;
+}
+
+void softmax(std::vector<float> &x)
+{
+    // TODO: max_val could be calculated previously?
+    float max_val = *std::max_element(x.begin(), x.end());
+    float tot = 0.0;
+    for (size_t i = 0; i < x.size(); i++)
+    {
+        x[i] = std::exp(x[i] - max_val);
+        tot += x[i];
+    }
+    for (size_t i = 0; i < x.size(); i++)
+        x[i] /= tot;
+}
+
+void sparq(const float *q, const float *K, const float *V,
+           int seq_len, int head_dim, int k1, int k2, float *out)
+{
+    // Step 1 - Probably requires K^T (no softmax for now)
+    std::vector<float> s_hat = step1_t(q, K, seq_len, head_dim, k1);
+
+    // Find top-k2 approximate scores
+    std::vector<P> topk_out = topk(s_hat.data(), s_hat.size(), k2);
+
+    // Calculate scores for top-k2, s -- (k2, )
+    std::vector<float> s(k2, 0.0);
+    for (int i = 0; i < k2; i++)
+    {
+        int idx = topk_out[i].first;
+        for (int j = 0; j < head_dim; j++)
+        {
+            s[i] += q[j] * K[idx * head_dim + j];
+        }
+        s[i] /= std::sqrt(head_dim);
+    }
+    softmax(s);
+
+    // Perform weighted sum of values
+    // Comments:
+    // * (!) Pointer aliasing
+    // * Declare that pointer aliasing is not allowed (restrict keyword)
+    // * Compiler might not know V and out are separate in memory
+    for (int i = 0; i < k2; i++)
+    {
+        float w = s[i];
+        int idx = topk_out[i].first;
+        for (int j = 0; j < head_dim; j++)
+        {
+            out[j] += w * V[idx * head_dim + j];
+        }
     }
 }
 
-ggml_tensor* sparq_attn(ggml_context* ctx, ggml_tensor* Q, ggml_tensor* K, ggml_tensor* V, int k1, int k2)
+void test_step_1(bool use_transposed)
 {
-    // Note -> dimensions in ne are inverted!
-    // Q -- (bs * num_heads, 1, head_dim)
-    // K, V -- (bs * num_heads, seq_len, head_dim)
-    
-    int head_dim = Q->ne[0];
+    // Tensor sizes
+    const int head_dim{128};
+    const int seq_len{1000000};
 
-    // ===== Step 1 =====
+    // Fill with random numbers
+    std::vector<float> q(head_dim);
+    std::vector<float> K(head_dim * seq_len);
 
-    // // i1 -- (bs * num_heads, 1, k1)
-    // ggml_tensor* i1 = ggml_top_k(ctx, ggml_abs(ctx, Q), k1);
-    // i1 = ggml_reshape_2d(ctx, i1, i1->ne[0], i1->ne[2]); // is this doing unnecessary copying?
-    // // Q_hat -- (bs * num_heads, 1, k1)
-    // ggml_tensor* Q_hat = ggml_transpose(ctx, (ctx, ggml_transpose(ctx, Q), i1));
-    // // K_hat -- (bs * num_heads, seq_len, k1)
-    // ggml_tensor* K_hat = ggml_transpose(ctx, ggml_get_rows(ctx, ggml_transpose(ctx, K), i1));
-    // // scores_hat -- (bs * num_heads, 1, seq_len), ignore softmax for now, use just for top-k2
-    // ggml_tensor* scores_hat = ggml_mul_mat(ctx, K_hat, Q_hat);
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::normal_distribution<float> dis(0.0, 10.0);
+    for (int i = 0; i < head_dim; i++)
+        q[i] = dis(gen);
 
-    // For "sparse-V" use normal scores
-    // scores -- (bs * num_heads, 1, seq_len)
-    ggml_tensor* scores = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, K, Q), nullptr, nullptr, 1.0f/sqrtf(float(head_dim)), 0.0f);
-    
-    // ===== Step 2 =====
+    for (int i = 0; i < head_dim * seq_len; i++)
+        K[i] = dis(gen);
 
-    // i2 -- (bs * num_heads, 1, k2)
-    ggml_tensor* i2 = ggml_top_k(ctx, scores, k2);
+    int k1 = 128; // rank
 
-    // Squeeze to (bs * num_heads, k2) for gather (get_rows) op
-    i2 = ggml_reshape_2d(ctx, i2, i2->ne[0], i2->ne[2]); // is this doing unnecessary copying?
+    using clock = std::chrono::system_clock;
+    // Step 1
+    auto size = seq_len * std::min(k1, head_dim) * sizeof(K.front());
 
-    // scores_gathered -- (bs * num_heads, k2, 1)
-    ggml_tensor* scores_gathered = ggml_get_rows(ctx, ggml_transpose(ctx, scores), i2);
-
-    // V_gathered -- (bs * num_heads, k2, head_dim)
-    ggml_tensor* V_gathered = ggml_get_rows(ctx, V, i2);
-
-    // out -- (bs * num_heads, 1, head_dim)
-    return ggml_mul_mat(ctx, ggml_transpose(ctx, V_gathered), ggml_transpose(ctx, scores_gathered));
+    auto t0 = clock::now();
+    std::vector<float> out;
+    if (use_transposed)
+        out = step1_t(q.data(), K.data(), seq_len, head_dim, k1);
+    else
+        out = step1(q.data(), K.data(), seq_len, head_dim, k1);
+    auto duration = clock::now() - t0;
+    auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
+    std::cerr << "  Size: " << size / 1e9 << " GB"               //
+              << "\n    In: " << elapsed << " s"                 //
+              << "\n    At: " << size / elapsed / 1e9 << " GB/s" //
+              << std::endl;
 }
 
+void test_sparq()
+{
+    // Tensor sizes
+    const int head_dim{128};
+    const int seq_len{1000000};
+
+    // Fill with random numbers
+    std::vector<float> q(head_dim);
+    std::vector<float> K(head_dim * seq_len);
+    std::vector<float> V(head_dim * seq_len);
+    std::vector<float> out(head_dim);
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::normal_distribution<float> dis(0.0, 10.0);
+    for (int i = 0; i < head_dim; i++)
+        q[i] = dis(gen);
+
+    for (int i = 0; i < head_dim * seq_len; i++)
+    {
+        K[i] = dis(gen);
+        V[i] = dis(gen);
+    }
+
+    int k1 = head_dim; // rank
+    int k2 = 1;
+
+    using clock = std::chrono::system_clock;
+    // Step 1
+    auto size = seq_len * std::min(k1, head_dim) * sizeof(K.front());
+    // Step 2
+    size += 2 * k2 * head_dim * sizeof(K.front());
+
+    auto t0 = clock::now();
+    sparq(q.data(), K.data(), V.data(), seq_len, head_dim, k1, k2, out.data());
+    auto duration = clock::now() - t0;
+    auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
+    std::cerr << "  Size: " << size / 1e9 << " GB"               //
+              << "\n    In: " << elapsed << " s"                 //
+              << "\n    At: " << size / elapsed / 1e9 << " GB/s" //
+              << std::endl;
+}
 
 int main()
 {
-    // Define memory allocation
-    // (note: not sure how to interpret the no_alloc param, breaks if true)
-    ggml_init_params params {
-        ggml_tensor_overhead() * 3 + ggml_graph_overhead() + 1024,
-        nullptr,
-        false
-    };
-
-    // Create the context (and allocate the memory)
-    ggml_context* ctx = ggml_init(params);
-
-    // Define the tensors
-    ggml_tensor* x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4); // (4, 3) tensor
-    ggml_tensor* idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2); // (2,) tensor
-
-    // Build the computational graph
-    ggml_tensor* out = ggml_get_rows(ctx, x, idx);
-    // a -- (bs, num_rows, num_cols)
-    // b -- (bs, k)
-    // out -- (bs, k, num_cols)
-
-
-    ggml_cgraph* gf = ggml_new_graph(ctx);
-    ggml_build_forward_expand(gf, out);
-
-    // Set tensor values
-    std::srand(42);
-    for (int i = 0; i < 3*4; i++)
-    {
-        ggml_set_f32_1d(x, i, std::rand() % 100);
-    }
-    int idxs[] {3, 0};
-    for (int i = 0; i < 2; i++)
-    {
-        ggml_set_i32_1d(idx, i, idxs[i]);
-    }
-
-    // Perform the computation
-    ggml_graph_compute_with_ctx(ctx, gf, 1);
-
-    // Might need to release memory if repeating
-    // ...
-
-    // Print the data
-    std::cout << "Original tensor:\n";
-    print_tensor(x);
-    std::cout << "Gather indices:\n";
-    print_tensor(idx);
-    std::cout << "Gathered tensor:\n";
-    print_tensor(out);
-
+    test_sparq();
     return 0;
 }
