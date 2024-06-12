@@ -10692,6 +10692,7 @@ static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
 
+
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
@@ -10711,6 +10712,7 @@ static void ggml_compute_forward_mul_mat(
     enum ggml_type    const vec_dot_type          = type_traits[type].vec_dot_type;
     ggml_from_float_t const from_float_to_vec_dot = type_traits[vec_dot_type].from_float;
     int64_t           const vec_dot_num_rows      = type_traits[type].nrows;
+
 
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
@@ -10791,6 +10793,7 @@ static void ggml_compute_forward_mul_mat(
                 const float * y = (float *) ((char *) src1->data + i12*nb12 + i13*nb13);
                       float * d = (float *) ((char *)  dst->data + i12*nb2  + i13*nb3);
 
+
                 if (type != GGML_TYPE_F32) {
                     x = (float *) params->wdata + i13*ne12*ne_plane + i12*ne_plane;
                 }
@@ -10809,6 +10812,7 @@ static void ggml_compute_forward_mul_mat(
         return;
     }
 #endif
+
 
     if (params->type == GGML_TASK_TYPE_INIT) {
         if (ith != 0) {
@@ -10886,7 +10890,9 @@ static void ggml_compute_forward_mul_mat(
         nrc = 1;
     }
 
+
     const size_t src1_col_stride = src1_cont || src1->type != vec_dot_type ? row_size : nb11;
+    // LHG printf("%d, %d, %d (%d, %d) %s\n", src1->type, vec_dot_type, src1_col_stride, row_size, nb11, src1->type != vec_dot_type ? "true" : "false");
 
     // attempt to reduce false-sharing (does not seem to make a difference)
     // 16 * 2, accounting for mmla kernels
@@ -14024,6 +14030,43 @@ static void ggml_compute_forward_timestep_embedding(
     }
 }
 
+
+// Function to partition the array and return the pivot index
+int64_t partition(int32_t* arr, int64_t low, int64_t high, const float* src_data, int order) {
+    int32_t pivot = arr[high]; // Choose the last element as pivot
+    int64_t i = low - 1; // Index of the smaller element
+
+    for (int64_t j = low; j <= high - 1; j++) {
+        // Check if current element is smaller than or equal to pivot
+        if ((order == GGML_SORT_ORDER_ASC && src_data[arr[j]] <= src_data[pivot]) ||
+            (order == GGML_SORT_ORDER_DESC && src_data[arr[j]] >= src_data[pivot])) {
+            i++; // Increment index of smaller element
+
+            int32_t temp_1 = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp_1;
+        }
+    }
+    int32_t temp_2 = arr[i + 1];
+    arr[i + 1] = arr[high];
+    arr[high] = temp_2;
+
+    return (i + 1); // Return the partition index
+}
+
+// Function to perform quicksort
+void quicksort(int32_t* arr, int64_t low, int64_t high, const float* src_data, int order) {
+    if (low < high) {
+        // Partition the array and get the pivot index
+        int64_t pi = partition(arr, low, high, src_data, order);
+
+        // Recursively sort elements before and after the pivot
+        quicksort(arr, low, pi - 1, src_data, order);
+        quicksort(arr, pi + 1, high, src_data, order);
+    }
+}
+
+
 // ggml_compute_forward_argsort
 
 static void ggml_compute_forward_argsort_f32(
@@ -14055,17 +14098,25 @@ static void ggml_compute_forward_argsort_f32(
             dst_data[j] = j;
         }
 
-        // C doesn't have a functional sort, so we do a bubble sort instead
-        for (int64_t j = 0; j < ne0; j++) {
-            for (int64_t k = j + 1; k < ne0; k++) {
-                if ((order == GGML_SORT_ORDER_ASC  && src_data[dst_data[j]] > src_data[dst_data[k]]) ||
-                    (order == GGML_SORT_ORDER_DESC && src_data[dst_data[j]] < src_data[dst_data[k]])) {
-                    int32_t tmp = dst_data[j];
-                    dst_data[j] = dst_data[k];
-                    dst_data[k] = tmp;
+        bool bubble_sort = false;
+
+        if (bubble_sort) {
+            // C doesn't have a functional sort, so we do a bubble sort instead
+            for (int64_t j = 0; j < ne0; j++) {
+                for (int64_t k = j + 1; k < ne0; k++) {
+                    if ((order == GGML_SORT_ORDER_ASC  && src_data[dst_data[j]] > src_data[dst_data[k]]) ||
+                        (order == GGML_SORT_ORDER_DESC && src_data[dst_data[j]] < src_data[dst_data[k]])) {
+                        int32_t tmp = dst_data[j];
+                        dst_data[j] = dst_data[k];
+                        dst_data[k] = tmp;
+                    }
                 }
             }
+        } else {
+            // SparQ - attempt at faster sorting algorithm
+            quicksort(dst_data, 0, ne0 - 1, src_data, order);
         }
+
     }
 }
 
