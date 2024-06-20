@@ -664,7 +664,7 @@ endif
 # Build library
 #
 
-ggml.o: ggml.c ggml.h ggml-cuda.h
+ggml.o: ggml.c ggml.h ggml-cuda.h sparq.h
 	$(CC)  $(CFLAGS)   -c $< -o $@
 
 ggml-alloc.o: ggml-alloc.c ggml.h ggml-alloc.h
@@ -682,9 +682,15 @@ unicode.o: unicode.cpp unicode.h
 unicode-data.o: unicode-data.cpp unicode-data.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-OBJS += ggml-alloc.o ggml-backend.o ggml-quants.o unicode.o unicode-data.o
+helper_funcs.o: helper_funcs.cpp helper_funcs.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-llama.o: llama.cpp unicode.h ggml.h ggml-alloc.h ggml-backend.h ggml-cuda.h ggml-metal.h llama.h
+sparq.o: sparq.cpp sparq.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+OBJS += ggml-alloc.o ggml-backend.o ggml-quants.o unicode.o unicode-data.o helper_funcs.o sparq.o
+
+llama.o: llama.cpp helper_funcs.h unicode.h ggml.h ggml-alloc.h ggml-backend.h ggml-cuda.h ggml-metal.h llama.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 COMMON_H_DEPS = common/common.h common/sampling.h common/log.h

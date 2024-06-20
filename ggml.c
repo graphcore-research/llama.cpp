@@ -4,6 +4,8 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "ggml.h"
+// MODIFIED
+#include "sparq.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1951,6 +1953,9 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DUP",
     "ADD",
     "ADD1",
+    // MODIFIED
+    "ADD_NOTHING",
+    "SPARQ_ATTN",
     "ACC",
     "SUB",
     "MUL",
@@ -2033,7 +2038,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 76, "GGML_OP_COUNT != 76");
+// MODIFIED
+static_assert(GGML_OP_COUNT == 78, "GGML_OP_COUNT != 78");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -2041,6 +2047,9 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "x",
     "x+y",
     "x+y",
+    // MODIFIED
+    "x",
+    "sparq_attn(x)",
     "view(x,nb,offset)+=y->x",
     "x-y",
     "x*y",
@@ -2123,7 +2132,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss_back(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 76, "GGML_OP_COUNT != 76");
+// MODIFIED
+static_assert(GGML_OP_COUNT == 78, "GGML_OP_COUNT != 78");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3671,6 +3681,47 @@ struct ggml_tensor * ggml_add_inplace(
         struct ggml_tensor * a,
         struct ggml_tensor * b) {
     return ggml_add_impl(ctx, a, b, true);
+}
+// MODIFIED
+
+struct ggml_tensor * ggml_add_nothing(struct ggml_context * ctx, struct ggml_tensor *a) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    result->nb[0] = a->nb[0];
+    result->nb[1] = a->nb[1];
+    result->nb[2] = a->nb[2];
+    result->nb[3] = a->nb[3];
+
+    result->op = GGML_OP_ADD_NOTHING;
+    result->grad = NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_sparq_attn(
+            struct ggml_context * ctx,
+            struct ggml_tensor * q,
+            struct ggml_tensor * K,
+            struct ggml_tensor * V_t,
+            int seq_len,
+            int head_dim,
+            int k1,
+            int k2)
+{
+    // Check if q is contiguous? result should be (head_dim, 1, heads, batch)
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, q);
+
+    result->op = GGML_OP_SPARQ_ATTN;
+    result-> grad = NULL;
+
+    int params[] = { seq_len, head_dim, k1, k2 };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->src[0] = q;
+    result->src[1] = K;
+    result->src[2] = V_t;
+
+    return result;
 }
 
 // ggml_add_cast
@@ -8100,6 +8151,93 @@ static void ggml_compute_forward_add_q_f32(
             memcpy(dst_row, wdata, ne0*nb0);
         }
     }
+}
+
+// MODIFIED
+static void ggml_compute_forward_sparq_attn(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst)
+{
+    // What does this do?
+    if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
+        return;
+    }
+    
+    // q -- (head_dim, seq_len, num_heads, batch)
+    // sparq should only be called for seq_len = 1
+    GGML_ASSERT(dst->src[0]->ne[1] == 1);
+
+    // SparQ parameters
+    int seq_len = 0;
+    int head_dim = 0;
+    int k1 = 0;
+    int k2 = 0;
+    memcpy(&seq_len, (int *) dst->op_params + 0, sizeof(int));
+    memcpy(&head_dim, (int *) dst->op_params + 1, sizeof(int));
+    memcpy(&k1, (int *) dst->op_params + 2, sizeof(int));
+    memcpy(&k2, (int *) dst->op_params + 3, sizeof(int));
+
+    // Get the current head tensors
+    // n_threads >= n_heads * batch_size
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int n_heads = dst->ne[2];
+    GGML_ASSERT(n_heads == 32);
+    GGML_ASSERT(nth >= n_heads);
+
+    if (ith >= n_heads)
+    {
+        return;
+    }
+
+    struct ggml_tensor * q = dst->src[0];
+    struct ggml_tensor * K = dst->src[1];
+    struct ggml_tensor * V_t = dst->src[2];
+    // GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(ggml_is_contiguous(K));
+    GGML_ASSERT(ggml_is_contiguous(V_t));
+
+    // Assume FLOAT32(!)
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+    GGML_ASSERT(K->type == GGML_TYPE_F32);
+    GGML_ASSERT(V_t->type == GGML_TYPE_F32);
+    const float * q_ptr = (float *) q->data + ith * q->ne[0] * q->ne[1] * sizeof(float);
+    const float * K_ptr = (float *) K->data + ith * K->ne[0] * K->ne[1] * sizeof(float);
+    const float * V_t_ptr = (float *) V_t->data + ith * V_t->ne[0] * V_t->ne[1] * sizeof(float);
+    float * out_ptr = (float *) dst->data + ith * dst->ne[0] * dst->ne[1] * sizeof(float);
+
+    sparq(q_ptr, K_ptr, NULL, NULL, V_t_ptr, seq_len, head_dim, k1, k2, out_ptr);
+}
+
+static void ggml_compute_forward_add_nothing(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    if (src0->type != GGML_TYPE_F32)
+    {
+        GGML_ASSERT(false);
+    }
+    
+    if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
+        return;
+    }
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+
+    int n_elements = (int) ggml_nelements(dst);
+
+    const int n_els_per_th = (n_elements + nth - 1) / nth;
+
+    const int i0 = n_els_per_th * ith;
+    const int i1 = MIN(i0 + n_els_per_th, n_elements);
+
+    for (int i = i0; i < i1; i++)
+    {
+        *((float*) dst->data + i) = *((float*) src0->data + i) + 100;
+    }
+
 }
 
 static void ggml_compute_forward_add(
@@ -16120,6 +16258,15 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_add(params, tensor);
             } break;
+        // MODIFIED
+        case GGML_OP_ADD_NOTHING:
+            {
+                ggml_compute_forward_add_nothing(params, tensor);
+            } break;
+        case GGML_OP_SPARQ_ATTN:
+            {
+                ggml_compute_forward_sparq_attn(params, tensor);
+            } break;
         case GGML_OP_ADD1:
             {
                 ggml_compute_forward_add1(params, tensor);
@@ -16741,6 +16888,12 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                         zero_table);
                 }
             } break;
+        // MODIFIED
+        case GGML_OP_ADD_NOTHING:
+        case GGML_OP_SPARQ_ATTN:
+        {
+
+        } break;
         case GGML_OP_ACC:
             {
                 if (src0->grad) {
@@ -17973,6 +18126,9 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads, int n_cur_
         case GGML_OP_DUP:
         case GGML_OP_ADD:
         case GGML_OP_ADD1:
+        // MODIFIED
+        case GGML_OP_ADD_NOTHING:
+        case GGML_OP_SPARQ_ATTN:
         case GGML_OP_ACC:
             {
                 n_tasks = n_threads;
@@ -18413,7 +18569,14 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                         cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                     }
                 } break;
+            // MODIFIED
+            case GGML_OP_SPARQ_ATTN:
+            {
+                // Probably not right
+                cur = ggml_type_size(GGML_TYPE_F32) * ggml_nelements(node->src[0]) * 10;
+            } break;
             case GGML_OP_ADD:
+            case GGML_OP_ADD_NOTHING:
             case GGML_OP_ADD1:
                 {
                     if (ggml_is_quantized(node->src[0]->type)) {
