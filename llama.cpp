@@ -5861,6 +5861,7 @@ static struct ggml_tensor * llm_build_kqv(
          struct ggml_tensor * q_cur,
          struct ggml_tensor * kq_mask,
          struct ggml_tensor * kq_pos,
+                    int32_t   seq_len,
                     int64_t   n_ctx,
                     int32_t   n_tokens,
                     int32_t   n_kv,
@@ -5884,28 +5885,52 @@ static struct ggml_tensor * llm_build_kqv(
                 0);
     cb(k, "k", il);
 
-    struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-    cb(kq, "kq", il);
+    // ** MOVED EARLIER **
+    GGML_ASSERT(kv.size == n_ctx);
 
-    if (model.arch == LLM_ARCH_PHI2) {
-        // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
-        // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
-        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+    // split cached v into n_head heads
+    struct ggml_tensor * v =
+        ggml_view_3d(ctx, kv.v_l[il],
+                n_kv, n_embd_head_v, n_head_kv,
+                ggml_element_size(kv.v_l[il])*n_ctx,
+                ggml_element_size(kv.v_l[il])*n_ctx*n_embd_head_v,
+                0);
+    cb(v, "v", il);
+    // ^^ MOVED EARLIER ^^
+
+    // So it's defined outside if/else
+    struct ggml_tensor * kqv;
+
+    // ** SPARQ **
+    if (q->ne[1] == 1)
+    {
+        kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
     }
+    // ** STANDARD ATTENTION **
+    else
+    {
+        struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+        cb(kq, "kq", il);
 
-    if (model.arch == LLM_ARCH_GROK) {
-        // need to do the following:
-        // multiply by attn_output_multiplyer of 0.08838834764831845
-        // and then :
-        // kq = 30 * tanh(kq / 30)
-        // before the softmax below
+        if (model.arch == LLM_ARCH_PHI2) {
+            // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
+            // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        }
 
-        //try from phi2
-        //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        if (model.arch == LLM_ARCH_GROK) {
+            // need to do the following:
+            // multiply by attn_output_multiplyer of 0.08838834764831845
+            // and then :
+            // kq = 30 * tanh(kq / 30)
+            // before the softmax below
 
-        kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
-        kq = ggml_scale(ctx, kq, 30);
-    }
+            //try from phi2
+            //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+
+            kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
+            kq = ggml_scale(ctx, kq, 30);
+        }
 
 #if defined(GGML_USE_KOMPUTE)
 #pragma message("TODO: ALiBi support in ggml_soft_max_ext is not implemented for Kompute")
@@ -5925,25 +5950,15 @@ static struct ggml_tensor * llm_build_kqv(
         cb(kq, "kq_soft_max", il);
     } else
 #endif
-    {
-        kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_pos, kq_scale, hparams.f_max_alibi_bias);
-        cb(kq, "kq_soft_max_ext", il);
+        {
+            kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_pos, kq_scale, hparams.f_max_alibi_bias);
+            cb(kq, "kq_soft_max_ext", il);
+        }
+
+
+        kqv = ggml_mul_mat(ctx, v, kq);
+        cb(kqv, "kqv", il);
     }
-
-    GGML_ASSERT(kv.size == n_ctx);
-
-    // split cached v into n_head heads
-    struct ggml_tensor * v =
-        ggml_view_3d(ctx, kv.v_l[il],
-                n_kv, n_embd_head_v, n_head_kv,
-                ggml_element_size(kv.v_l[il])*n_ctx,
-                ggml_element_size(kv.v_l[il])*n_ctx*n_embd_head_v,
-                0);
-    cb(v, "v", il);
-
-    struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
-    cb(kqv, "kqv", il);
-
     struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
     cb(kqv_merged, "kqv_merged", il);
 
@@ -5996,7 +6011,7 @@ static struct ggml_tensor * llm_build_kv(
     struct ggml_tensor * cur;
 
     cur  = llm_build_kqv(ctx, model, hparams, kv, graph, wo, wo_b,
-            q_cur, kq_mask, kq_pos, n_ctx, n_tokens, n_kv, kq_scale, cb, il);
+            q_cur, kq_mask, kq_pos, kv_head + 1, n_ctx, n_tokens, n_kv, kq_scale, cb, il);
     cb(cur, "kqv_out", il);
 
     return cur;
