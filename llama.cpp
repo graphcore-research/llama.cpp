@@ -6,6 +6,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "helper_funcs.h"
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
@@ -5712,9 +5713,21 @@ static void llm_build_kv_store(
     struct ggml_tensor * v_cur_t = ggml_transpose(ctx, v_cur);
     cb(v_cur_t, "v_cur_t", il);
 
+
     struct ggml_tensor * k_cache_view = ggml_view_1d(ctx, kv.k_l[il], n_tokens*n_embd_k_gqa,
             (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
     cb(k_cache_view, "k_cache_view", il);
+
+    // Target:
+    // K -- (head_dim, max_seq_len, head, batch)
+    // V -- (head_dim, max_seq_len, head, batch)
+    // K_t -- (max_seq_len, head_dim, head, batch)
+
+    // Current:
+    // K -- (head_dim, head, (max) seq_len, batch)
+    print_tensor_structure(k_cur, "k_cur before permutation");
+    k_cur = ggml_permute(ctx, k_cur, 0, 2, 1, 3);
+    print_tensor_structure(k_cur, "k_cur after permutation");
 
     struct ggml_tensor * v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
             (  n_ctx)*ggml_element_size(kv.v_l[il]),
@@ -5884,6 +5897,8 @@ static struct ggml_tensor * llm_build_kqv(
                 ggml_row_size(kv.k_l[il]->type, n_embd_head_k),
                 0);
     cb(k, "k", il);
+    print_tensor_structure(k, "k cache");
+
 
     // ** MOVED EARLIER **
     GGML_ASSERT(kv.size == n_ctx);
@@ -5898,17 +5913,18 @@ static struct ggml_tensor * llm_build_kqv(
     cb(v, "v", il);
     // ^^ MOVED EARLIER ^^
 
+
     // So it's defined outside if/else
     struct ggml_tensor * kqv;
 
     // ** SPARQ **
-    if (q->ne[1] == 1)
-    {
-        kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
-    }
-    // ** STANDARD ATTENTION **
-    else
-    {
+    // if (q->ne[1] == -1)
+    // {
+    //     kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
+    // }
+    // // ** STANDARD ATTENTION **
+    // else
+    // {
         struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
         cb(kq, "kq", il);
 
@@ -5958,7 +5974,7 @@ static struct ggml_tensor * llm_build_kqv(
 
         kqv = ggml_mul_mat(ctx, v, kq);
         cb(kqv, "kqv", il);
-    }
+    // }
     struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
     cb(kqv_merged, "kqv_merged", il);
 
