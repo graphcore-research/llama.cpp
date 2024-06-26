@@ -3703,6 +3703,7 @@ struct ggml_tensor * ggml_sparq_attn(
             struct ggml_tensor * q,
             struct ggml_tensor * K,
             struct ggml_tensor * V_t,
+            struct ggml_tensor * kq_mask,
             int seq_len,
             int head_dim,
             int k1,
@@ -3720,6 +3721,7 @@ struct ggml_tensor * ggml_sparq_attn(
     result->src[0] = q;
     result->src[1] = K;
     result->src[2] = V_t;
+    result->src[3] = kq_mask;
 
     return result;
 }
@@ -8193,6 +8195,7 @@ static void ggml_compute_forward_sparq_attn(
     struct ggml_tensor * q = dst->src[0];
     struct ggml_tensor * K = dst->src[1];
     struct ggml_tensor * V_t = dst->src[2];
+    // struct ggml_tensor * kq_mask = dst->src[3];
     // GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(K));
     GGML_ASSERT(ggml_is_contiguous(V_t));
@@ -8204,8 +8207,10 @@ static void ggml_compute_forward_sparq_attn(
     const float * q_ptr = (float *) q->data + ith * q->ne[0] * q->ne[1] * sizeof(float);
     const float * K_ptr = (float *) K->data + ith * K->ne[0] * K->ne[1] * sizeof(float);
     const float * V_t_ptr = (float *) V_t->data + ith * V_t->ne[0] * V_t->ne[1] * sizeof(float);
+    // const float * kq_mask_ptr = (float *) kq_mask->data;
     float * out_ptr = (float *) dst->data + ith * dst->ne[0] * dst->ne[1] * sizeof(float);
 
+    // kq_mask is currently unused in sparq
     sparq(q_ptr, K_ptr, NULL, NULL, V_t_ptr, seq_len, head_dim, k1, k2, out_ptr);
 }
 

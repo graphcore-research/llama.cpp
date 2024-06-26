@@ -5904,7 +5904,7 @@ static struct ggml_tensor * llm_build_kqv(
     // ** SPARQ **
     if (q->ne[1] == 1)
     {
-        kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
+        kqv = ggml_sparq_attn(ctx, q, k, v, kq_mask, seq_len, q->ne[0], 64, 256);
     }
     // ** STANDARD ATTENTION **
     else

@@ -1819,6 +1819,7 @@ extern "C" {
             struct ggml_tensor * q,
             struct ggml_tensor * K,
             struct ggml_tensor * V_t,
+            struct ggml_tensor * kq_mask,
             int seq_len,
             int head_dim,
             int k1,
