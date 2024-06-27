@@ -5748,7 +5748,7 @@ static void llm_build_kv_store(
         );
         struct ggml_tensor * k_cur_t = ggml_transpose(ctx, k_cur);
         cb(k_cur_t, "k_cur_t", il);
-        
+
         ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur_t, k_t_cache_view));
     }
     else
