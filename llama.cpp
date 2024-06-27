@@ -5971,18 +5971,7 @@ static struct ggml_tensor * llm_build_kqv(
     // ** SPARQ **
     if (q->ne[1] == -1)
     {
-        // Override key cache with different nb values
-        k = ggml_view_3d(ctx, kv.k_l[il],
-                n_embd_head_k, n_kv, n_head_kv,
-                ggml_row_size(kv.k_l[il]->type, n_embd_head_k),
-                ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa),
-                0);
-        ggml_build_forward_expand(graph, kq_mask); // Temporary solution to overcome segfault
-        print_tensor_structure(k, "k cache");
-        printf(ggml_is_contiguous(k) ? "k cache is contiguous\n" : "k cache is not contiguous\n");
-        printf("Sequence Length = %d\n\n", seq_len);
-
-        kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
+        // kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
     }
     // ** STANDARD ATTENTION **
     else
