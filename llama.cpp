@@ -125,6 +125,11 @@ static void llama_log_callback_default(ggml_log_level level, const char * text, 
 // helpers
 //
 
+void print_contiguity(const ggml_tensor *t, std::string name) {
+    printf("%s is ", name.c_str());
+    printf(ggml_is_contiguous(t) ? "contiguous\n" : "not contiguous\n");
+}
+
 static size_t utf8_len(char src) {
     const size_t lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4 };
     uint8_t highbits = static_cast<uint8_t>(src) >> 4;
@@ -1946,6 +1951,7 @@ struct llama_kv_cache {
     std::vector<llama_kv_cell> cells;
 
     std::vector<struct ggml_tensor *> k_l; // per layer
+    std::vector<struct ggml_tensor *> k_t_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
 
     std::vector<struct ggml_context *> ctxs;
@@ -2283,7 +2289,8 @@ static bool llama_kv_cache_init(
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
         struct ggml_init_params params = {
-            /*.mem_size   =*/ 2u*n_layers*ggml_tensor_overhead(),
+            /*.mem_size   =*/ 3u*n_layers*ggml_tensor_overhead(), // Increased memory for SparQ Attention's K transposed cache
+            // /*.mem_size   =*/ 2u*n_layers*ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
@@ -2297,15 +2304,19 @@ static bool llama_kv_cache_init(
     }
 
     cache.k_l.reserve(n_layer);
+    cache.k_t_l.reserve(n_layer);
     cache.v_l.reserve(n_layer);
 
     for (int i = 0; i < (int) n_layer; i++) {
         struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
+        ggml_tensor * k_t = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
         ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
         ggml_format_name(k, "cache_k_l%d", i);
+        ggml_format_name(k_t, "cache_k_t_l%d", i);
         ggml_format_name(v, "cache_v_l%d", i);
         cache.k_l.push_back(k);
+        cache.k_t_l.push_back(k_t);
         cache.v_l.push_back(v);
     }
 
@@ -5702,41 +5713,65 @@ static void llm_build_kv_store(
                     int32_t   n_tokens,
                     int32_t   kv_head,
          const llm_build_cb & cb,
-                    int64_t   il) {
+                    int64_t   il,
+                       bool   sparq_attn) {
     const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa();
     const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa();
 
     GGML_ASSERT(kv.size == n_ctx);
-
-    // compute the transposed [n_tokens, n_embd] V matrix
-    assert(v_cur->ne[0] == n_embd_v_gqa && v_cur->ne[1] == n_tokens);
-    struct ggml_tensor * v_cur_t = ggml_transpose(ctx, v_cur);
-    cb(v_cur_t, "v_cur_t", il);
 
 
     struct ggml_tensor * k_cache_view = ggml_view_1d(ctx, kv.k_l[il], n_tokens*n_embd_k_gqa,
             (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
     cb(k_cache_view, "k_cache_view", il);
 
-    // Target:
-    // K -- (head_dim, max_seq_len, head, batch)
-    // V -- (head_dim, max_seq_len, head, batch)
-    // K_t -- (max_seq_len, head_dim, head, batch)
+    struct ggml_tensor * v_cache_view;
+    struct ggml_tensor * k_t_cache_view;
+    if (sparq_attn)
+    {
 
-    // Current:
-    // K -- (head_dim, head, (max) seq_len, batch)
-    print_tensor_structure(k_cur, "k_cur before permutation");
-    k_cur = ggml_permute(ctx, k_cur, 0, 2, 1, 3);
-    print_tensor_structure(k_cur, "k_cur after permutation");
+        v_cache_view = ggml_view_1d(
+            ctx, 
+            kv.v_l[il], 
+            n_tokens * n_embd_v_gqa,
+            ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa) * kv_head
+        );
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
 
-    struct ggml_tensor * v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
-            (  n_ctx)*ggml_element_size(kv.v_l[il]),
-            (kv_head)*ggml_element_size(kv.v_l[il]));
+        k_t_cache_view = ggml_view_2d(
+            ctx, 
+            kv.k_t_l[il], 
+            n_tokens, 
+            n_embd_k_gqa,
+            n_ctx * ggml_element_size(kv.k_t_l[il]),
+            kv_head * ggml_element_size(kv.k_t_l[il])
+        );
+        struct ggml_tensor * k_cur_t = ggml_transpose(ctx, k_cur);
+        cb(k_cur_t, "k_cur_t", il);
+        
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur_t, k_t_cache_view));
+    }
+    else
+    {
+        // compute the transposed [n_tokens, n_embd] V matrix
+        assert(v_cur->ne[0] == n_embd_v_gqa && v_cur->ne[1] == n_tokens);
+        struct ggml_tensor * v_cur_t = ggml_transpose(ctx, v_cur);
+        cb(v_cur_t, "v_cur_t", il);
+
+        v_cache_view = ggml_view_2d(
+            ctx, 
+            kv.v_l[il], 
+            n_tokens, 
+            n_embd_v_gqa,
+            n_ctx * ggml_element_size(kv.v_l[il]),
+            kv_head * ggml_element_size(kv.v_l[il])
+        );
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
+    }
     cb(v_cache_view, "v_cache_view", il);
 
     // important: storing RoPE-ed version of K in the KV cache!
     ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur,   k_cache_view));
-    ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
 }
 
 static struct ggml_tensor * llm_build_norm(
@@ -5880,7 +5915,8 @@ static struct ggml_tensor * llm_build_kqv(
                     int32_t   n_kv,
                     float     kq_scale,
          const llm_build_cb & cb,
-                    int       il) {
+                    int       il,
+                    bool      sparq_attn) {
     const int64_t n_head        = hparams.n_head;
     const int64_t n_head_kv     = hparams.n_head_kv;
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
@@ -5897,34 +5933,60 @@ static struct ggml_tensor * llm_build_kqv(
                 ggml_row_size(kv.k_l[il]->type, n_embd_head_k),
                 0);
     cb(k, "k", il);
-    print_tensor_structure(k, "k cache");
 
+    struct ggml_tensor * v;
+    
+    if (sparq_attn) {
+        v = ggml_view_3d(
+            ctx, 
+            kv.v_l[il],
+            n_embd_head_v, 
+            n_kv, 
+            n_head_kv,
+            ggml_row_size(kv.v_l[il]->type, n_embd_k_gqa),
+            ggml_row_size(kv.v_l[il]->type, n_embd_head_v),
+            0
+        );
+        v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3)); // This line just needs to be for prefill
+    } else {
+        v = ggml_view_3d(
+            ctx, 
+            kv.v_l[il],
+            n_kv, 
+            n_embd_head_v, 
+            n_head_kv,
+            ggml_element_size(kv.v_l[il]) * n_ctx,
+            ggml_element_size(kv.v_l[il]) * n_ctx * n_embd_head_v,
+            0
+        );
+    }
+    cb(v, "v", il);
 
     // ** MOVED EARLIER **
     GGML_ASSERT(kv.size == n_ctx);
-
-    // split cached v into n_head heads
-    struct ggml_tensor * v =
-        ggml_view_3d(ctx, kv.v_l[il],
-                n_kv, n_embd_head_v, n_head_kv,
-                ggml_element_size(kv.v_l[il])*n_ctx,
-                ggml_element_size(kv.v_l[il])*n_ctx*n_embd_head_v,
-                0);
-    cb(v, "v", il);
-    // ^^ MOVED EARLIER ^^
-
 
     // So it's defined outside if/else
     struct ggml_tensor * kqv;
 
     // ** SPARQ **
-    // if (q->ne[1] == -1)
-    // {
-    //     kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
-    // }
-    // // ** STANDARD ATTENTION **
-    // else
-    // {
+    if (q->ne[1] == -1)
+    {
+        // Override key cache with different nb values
+        k = ggml_view_3d(ctx, kv.k_l[il],
+                n_embd_head_k, n_kv, n_head_kv,
+                ggml_row_size(kv.k_l[il]->type, n_embd_head_k),
+                ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa),
+                0);
+        ggml_build_forward_expand(graph, kq_mask); // Temporary solution to overcome segfault
+        print_tensor_structure(k, "k cache");
+        printf(ggml_is_contiguous(k) ? "k cache is contiguous\n" : "k cache is not contiguous\n");
+        printf("Sequence Length = %d\n\n", seq_len);
+
+        kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
+    }
+    // ** STANDARD ATTENTION **
+    else
+    {
         struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
         cb(kq, "kq", il);
 
@@ -5974,7 +6036,7 @@ static struct ggml_tensor * llm_build_kqv(
 
         kqv = ggml_mul_mat(ctx, v, kq);
         cb(kqv, "kqv", il);
-    // }
+    }
     struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
     cb(kqv_merged, "kqv_merged", il);
 
@@ -6022,12 +6084,14 @@ static struct ggml_tensor * llm_build_kv(
     ggml_build_forward_expand(graph, k_cur);
     ggml_build_forward_expand(graph, v_cur);
 
-    llm_build_kv_store(ctx, hparams, kv, graph, k_cur, v_cur, n_ctx, n_tokens, kv_head, cb, il);
+    bool sparq_attn = true;
+
+    llm_build_kv_store(ctx, hparams, kv, graph, k_cur, v_cur, n_ctx, n_tokens, kv_head, cb, il, sparq_attn);
 
     struct ggml_tensor * cur;
 
     cur  = llm_build_kqv(ctx, model, hparams, kv, graph, wo, wo_b,
-            q_cur, kq_mask, kq_pos, kv_head + 1, n_ctx, n_tokens, n_kv, kq_scale, cb, il);
+            q_cur, kq_mask, kq_pos, kv_head + 1, n_ctx, n_tokens, n_kv, kq_scale, cb, il, sparq_attn);
     cb(cur, "kqv_out", il);
 
     return cur;
