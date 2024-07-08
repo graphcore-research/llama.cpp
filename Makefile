@@ -990,3 +990,7 @@ tests/test-autorelease: tests/test-autorelease.cpp ggml.o llama.o tests/get-mode
 tests/test-chat-template: tests/test-chat-template.cpp ggml.o llama.o $(COMMON_DEPS) $(OBJS)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+
+tests/test-sparq: test_sparq.cpp sparq.o
+	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
