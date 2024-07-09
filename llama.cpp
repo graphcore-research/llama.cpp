@@ -6015,10 +6015,6 @@ static struct ggml_tensor * llm_build_kqv(
     // ** STANDARD ATTENTION **
     else
     {
-        // printf("DOUG seq_len: %d\n", seq_len);
-        // printf("DOUG q: %d %d %d %d\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
-        // printf("DOUG k: %d %d %d %d\n", k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
-
         // printf("Before kq\n");
         struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
         cb(kq, "kq", il);
