@@ -91,6 +91,9 @@ void sparq(const float *q,
         return dense_attention(q, K, K_stride, K_t, K_t_stride, V, V_stride, V_t, V_t_stride, seq_len, head_dim, out);
     }
 
+    k1 = std::min(k1, head_dim);
+    k2 = std::min(k2, seq_len);
+
     // Step 1
     std::vector<float> s_hat;
     if (K_t == nullptr)

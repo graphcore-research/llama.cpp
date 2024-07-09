@@ -8179,24 +8179,13 @@ static void ggml_compute_forward_sparq_attn(
     memcpy(&k1, (int *) dst->op_params + 2, sizeof(int));
     memcpy(&k2, (int *) dst->op_params + 3, sizeof(int));
 
-    // Get the current head tensors
-    // n_threads >= n_heads * batch_size
-    // const int ith = params->ith;
     const int nth = params->nth;
     const int n_heads = dst->ne[2];
-    // GGML_ASSERT(n_heads == 32);
-    // GGML_ASSERT(nth >= n_heads);
-
-    // if (ith >= n_heads)
-    // {
-    //     return;
-    // }
 
     struct ggml_tensor * q = dst->src[0];
     struct ggml_tensor * K = dst->src[1];
     struct ggml_tensor * V_t = dst->src[2];
     // struct ggml_tensor * kq_mask = dst->src[3];
-    // GGML_ASSERT(ggml_is_contiguous(q));
     for (int ith = params->ith; ith < n_heads; ith += nth) {
         // printf("     q.shape %d %d %d %d\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
         // printf("     q.stride %d %d %d %d\n\n", q->nb[0], q->nb[1], q->nb[2], q->nb[3]);
@@ -8209,7 +8198,7 @@ static void ggml_compute_forward_sparq_attn(
         GGML_ASSERT(q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F32 && V_t->type == GGML_TYPE_F32);
         // All tensors contiguous on first dimension
         GGML_ASSERT(q->nb[0] == 4 && K->nb[0] == 4 && V_t->nb[0] == 4 && dst->nb[0] == 4);
-        dense_attention(
+        sparq(
             (float*) ((char*) q->data + ith * q->nb[2]),     // q
             (float*) ((char*) K->data + ith * K->nb[2]),     // K
             K->nb[1] / 4,                                    // K.stride
@@ -8221,27 +8210,11 @@ static void ggml_compute_forward_sparq_attn(
             V_t->nb[1] / 4,                                  // V_t.stride
             seq_len,
             head_dim,
+            k1,
+            k2,
             (float*) ((char*) dst->data + ith * dst->nb[2])  // out
         );
     }
-    return;
-
-    const int ith = params->ith;
-    GGML_ASSERT(ggml_is_contiguous(K));
-    GGML_ASSERT(ggml_is_contiguous(V_t));
-
-    // Assume FLOAT32(!)
-    GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT(K->type == GGML_TYPE_F32);
-    GGML_ASSERT(V_t->type == GGML_TYPE_F32);
-    const float * q_ptr = (float *) q->data + ith * q->ne[0] * q->ne[1] * sizeof(float);
-    const float * K_ptr = (float *) K->data + ith * K->ne[0] * K->ne[1] * sizeof(float);
-    const float * V_t_ptr = (float *) V_t->data + ith * V_t->ne[0] * V_t->ne[1] * sizeof(float);
-    // const float * kq_mask_ptr = (float *) kq_mask->data;
-    float * out_ptr = (float *) dst->data + ith * dst->ne[0] * dst->ne[1] * sizeof(float);
-
-    // kq_mask is currently unused in sparq
-    sparq(q_ptr, K_ptr, NULL, NULL, V_t_ptr, seq_len, head_dim, k1, k2, out_ptr);
 }
 
 static void ggml_compute_forward_add_nothing(
