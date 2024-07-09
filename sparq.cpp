@@ -171,11 +171,11 @@ void sparq(const float *q, const float *K, const float *K_t, const float *V, con
 
 void dense_attention(const float *q,
                      const float *K, int K_stride,
-                     const float *K_t, int K_t_stride,
+                     const float */*K_t*/, int /*K_t_stride*/,
                      const float *V, int V_stride,
                      const float *V_t, int V_t_stride,
                      int seq_len, int head_dim, float *out) {
-    assert(K_t == nullptr && V == nullptr && "not implemented");
+    assert(K != nullptr && "dense_attention() requires K (K_t is unimplemented)");
 
     std::vector<float> logits(seq_len);
     for (auto n = 0; n < seq_len; ++n) {
@@ -186,13 +186,24 @@ void dense_attention(const float *q,
         logits[n] = sum / std::sqrt(static_cast<float>(head_dim));
     }
 
-    softmax(logits.data(), seq_len);  // Note: could fuse this
+    softmax(logits.data(), seq_len);
 
-    for (auto i = 0; i < head_dim; ++i) {
-        auto mix = 0.0f;
-        for (auto n = 0; n < seq_len; ++n) {
-            mix += logits[n] * V_t[i * V_t_stride + n];
+    if (V_t != nullptr) {
+        for (auto i = 0; i < head_dim; ++i) {
+            auto mix = 0.0f;
+            for (auto n = 0; n < seq_len; ++n) {
+                mix += logits[n] * V_t[i * V_t_stride + n];
+            }
+            out[i] = mix;
         }
-        out[i] = mix;
+    } else if (V != nullptr) {
+        std::fill(out, out + head_dim, 0);
+        for (auto n = 0; n < seq_len; ++n) {
+            for (auto i = 0; i < head_dim; ++i) {
+                out[i] += logits[n] * V[n * V_stride + i];
+            }
+        }
+    } else {
+        assert(false && "dense_attention() requires V or V_t to be specified");
     }
 }

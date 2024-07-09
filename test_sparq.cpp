@@ -7,6 +7,7 @@
 
 void test_step_1()
 {
+    std::cerr << "test_step_1()" << std::endl;
     // head_dim = 4, seq_len = 3
     std::vector<float> q{-5.0, 1.0, 3.0, -2.0};
     std::vector<float> K{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
@@ -22,6 +23,7 @@ void test_step_1()
 
 void test_softmax()
 {
+    std::cerr << "test_softmax()" << std::endl;
     std::vector<float> x1{10, 10, 10, 10};
     std::vector<float> x2{1, 2, 3, 4};
     softmax(x1.data(), x1.size());
@@ -40,6 +42,7 @@ void test_softmax()
 
 void test_sparq()
 {
+    std::cerr << "test_sparq()" << std::endl;
     // seq_len = 4, head_size = 2
     // k1 = 1, k2 = 2
     std::vector<float> q{1.0, -0.5};
@@ -55,7 +58,7 @@ void test_sparq()
     float out[2], out_t[2], out_v_t[2], expected[2];
     expected[0] = s[0] * V[2] + s[1] * V[4];
     expected[1] = s[0] * V[3] + s[1] * V[5];
-    
+
     // Check using either K and K_t
     sparq(q.data(), K.data(), nullptr, V.data(), nullptr, 4, 2, 1, 2, out);
     sparq(q.data(), K.data(), K_t.data(), V.data(), nullptr, 4, 2, 1, 2, out_t);
@@ -70,6 +73,56 @@ void test_sparq()
         assert(std::abs(out_t[i] - expected[i]) < tol);
         assert(std::abs(out_v_t[i] - expected[i]) < tol);
     }
+}
+
+void test_dense_attention()
+{
+    std::cerr << "test_dense_attention()" << std::endl;
+
+    // Generated test data:
+    // import torch
+    // torch.manual_seed(100)
+    // q, K, V = torch.randn(2), torch.randn(3, 2), torch.randn(3, 2)
+    // o = torch.softmax((q @ K.T) / q.shape[-1]**.5, -1) @ V
+    // for t in "qKVo":
+    //     print(f"float {t}[] = {{" + ", ".join(f"{x:.3f}" for x in globals()[t].flatten()) + "};")
+
+    constexpr int head_dim = 2;
+    constexpr int seq_len = 3;
+    float q[] = {0.361, -0.286};
+    float K[] = {-0.394, 0.243, -1.383, -2.313, -0.317, -0.866};
+    float V[] = {1.748, -0.276, -0.975, 0.479, -2.365, -0.805};
+    float o[] = {-0.710, -0.190};
+
+    // Checker
+    float out[head_dim];
+    auto check_out = [o, &out](const std::string& name) {
+        for (auto i = 0; i < head_dim; ++i) {
+            if (std::abs(out[i] - o[i]) > 2e-3) {
+                std::cerr << "Assert failed for " << name
+                    << ", expected o[" << i << "] = " << o[i]
+                    << ", actual out[" << i << "] = " << out[i] << std::endl;
+                assert(false);
+            }
+        }
+    };
+
+    // Tests
+    dense_attention(q, K, /*K_stride=*/head_dim, /*K_t=*/nullptr, /*K_t_stride*/0,
+        V, /*V_stride*/head_dim, /*V_t*/nullptr, /*V_t_stride*/0,
+        seq_len, head_dim, out);
+    check_out("dense_attention");
+
+    float V_t[head_dim * seq_len];
+    for (auto n = 0; n < seq_len; ++n) {
+        for (auto i = 0; i < head_dim; ++i) {
+            V_t[i * seq_len + n] = V[n * head_dim + i];
+        }
+    }
+    dense_attention(q, K, /*K_stride=*/head_dim, /*K_t=*/nullptr, /*K_t_stride*/0,
+        /*V*/nullptr, /*V_stride*/0, V_t, /*V_t_stride*/seq_len,
+        seq_len, head_dim, out);
+    check_out("dense_attention(V_t)");
 }
 
 void benchmark_step_1(bool use_transposed)
@@ -159,4 +212,6 @@ int main()
     test_step_1();
     test_softmax();
     test_sparq();
+    test_dense_attention();
+    std::cerr << "-- ALL TESTS PASSED --" << std::endl;
 }
