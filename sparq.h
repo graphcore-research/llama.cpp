@@ -15,6 +15,12 @@ extern "C" {
 void softmax(float *x, int size);
 void sparq(const float *q, const float *K, const float *K_t, const float *V, const float *V_t,
            int seq_len, int head_dim, int k1, int k2, float *out);
+void dense_attention(const float *q,
+                     const float *K, int K_stride,
+                     const float *K_t, int K_t_stride,
+                     const float *V, int V_stride,
+                     const float *V_t, int V_t_stride,
+                     int seq_len, int head_dim, float *out);
 #ifdef __cplusplus
 }
 #endif

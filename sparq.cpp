@@ -1,8 +1,10 @@
 #include "sparq.h"
 
+#include <cassert>
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 
 std::vector<P> topk(const float *x, int size, int k, bool use_abs)
 {
@@ -95,6 +97,10 @@ void softmax(float *x, int size)
 void sparq(const float *q, const float *K, const float *K_t, const float *V, const float *V_t,
            int seq_len, int head_dim, int k1, int k2, float *out)
 {
+    // if (k1 == INT32_MAX && k2 == INT32_MAX) {
+    //     return dense_attention(q, K, K_t, V, V_t, seq_len, head_dim, out);
+    // }
+
     // Step 1
     std::vector<float> s_hat;
     if (K_t == nullptr)
@@ -160,5 +166,33 @@ void sparq(const float *q, const float *K, const float *K_t, const float *V, con
     {
         std::cout << "Pass either V or V_t" << std::endl;
         return;
+    }
+}
+
+void dense_attention(const float *q,
+                     const float *K, int K_stride,
+                     const float *K_t, int K_t_stride,
+                     const float *V, int V_stride,
+                     const float *V_t, int V_t_stride,
+                     int seq_len, int head_dim, float *out) {
+    assert(K_t == nullptr && V == nullptr && "not implemented");
+
+    std::vector<float> logits(seq_len);
+    for (auto n = 0; n < seq_len; ++n) {
+        auto sum = 0.0f;
+        for (auto i = 0; i < head_dim; ++i) {
+            sum += q[i] * K[n * K_stride + i];
+        }
+        logits[n] = sum / std::sqrt(static_cast<float>(head_dim));
+    }
+
+    softmax(logits.data(), seq_len);  // Note: could fuse this
+
+    for (auto i = 0; i < head_dim; ++i) {
+        auto mix = 0.0f;
+        for (auto n = 0; n < seq_len; ++n) {
+            mix += logits[n] * V_t[i * V_t_stride + n];
+        }
+        out[i] = mix;
     }
 }

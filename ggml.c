@@ -8164,7 +8164,7 @@ static void ggml_compute_forward_sparq_attn(
     if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }
-    
+
     // q -- (head_dim, seq_len, num_heads, batch)
     // sparq should only be called for seq_len = 1
     GGML_ASSERT(dst->src[0]->ne[1] == 1);
@@ -8181,22 +8181,52 @@ static void ggml_compute_forward_sparq_attn(
 
     // Get the current head tensors
     // n_threads >= n_heads * batch_size
-    const int ith = params->ith;
+    // const int ith = params->ith;
     const int nth = params->nth;
     const int n_heads = dst->ne[2];
-    GGML_ASSERT(n_heads == 32);
-    GGML_ASSERT(nth >= n_heads);
+    // GGML_ASSERT(n_heads == 32);
+    // GGML_ASSERT(nth >= n_heads);
 
-    if (ith >= n_heads)
-    {
-        return;
-    }
+    // if (ith >= n_heads)
+    // {
+    //     return;
+    // }
 
     struct ggml_tensor * q = dst->src[0];
     struct ggml_tensor * K = dst->src[1];
     struct ggml_tensor * V_t = dst->src[2];
     // struct ggml_tensor * kq_mask = dst->src[3];
     // GGML_ASSERT(ggml_is_contiguous(q));
+    for (int ith = params->ith; ith < n_heads; ith += nth) {
+        // printf("     q.shape %d %d %d %d\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
+        // printf("     q.stride %d %d %d %d\n\n", q->nb[0], q->nb[1], q->nb[2], q->nb[3]);
+        // printf("     K.shape %d %d %d %d\n", K->ne[0], K->ne[1], K->ne[2], K->ne[3]);
+        // printf("     K.stride %d %d %d %d\n\n", K->nb[0], K->nb[1], K->nb[2], K->nb[3]);
+        // printf("     V_t.shape %d %d %d %d\n", V_t->ne[0], V_t->ne[1], V_t->ne[2], V_t->ne[3]);
+        // printf("     V_t.stride %d %d %d %d\n\n", V_t->nb[0], V_t->nb[1], V_t->nb[2], V_t->nb[3]);
+        // printf("     dst.shape %d %d %d %d\n", dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+        // printf("     dst.stride %d %d %d %d\n\n", dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
+        GGML_ASSERT(q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F32 && V_t->type == GGML_TYPE_F32);
+        // All tensors contiguous on first dimension
+        GGML_ASSERT(q->nb[0] == 4 && K->nb[0] == 4 && V_t->nb[0] == 4 && dst->nb[0] == 4);
+        dense_attention(
+            (float*) ((char*) q->data + ith * q->nb[2]),     // q
+            (float*) ((char*) K->data + ith * K->nb[2]),     // K
+            K->nb[1] / 4,                                    // K.stride
+            NULL,                                            // K_t
+            0,                                               // K_t.stride
+            NULL,                                            // V
+            0,                                               // V.stride
+            (float*) ((char*) V_t->data + ith * V_t->nb[2]), // V_t
+            V_t->nb[1] / 4,                                  // V_t.stride
+            seq_len,
+            head_dim,
+            (float*) ((char*) dst->data + ith * dst->nb[2])  // out
+        );
+    }
+    return;
+
+    const int ith = params->ith;
     GGML_ASSERT(ggml_is_contiguous(K));
     GGML_ASSERT(ggml_is_contiguous(V_t));
 
@@ -8222,7 +8252,7 @@ static void ggml_compute_forward_add_nothing(
     {
         GGML_ASSERT(false);
     }
-    
+
     if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }

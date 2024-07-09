@@ -5738,9 +5738,9 @@ static void llm_build_kv_store(
 
     // Key Transposed Cache - Useful for Step 1 of SparQ Attention, can be moved into "if (sparq_attn)"
     k_t_cache_view = ggml_view_2d(
-        ctx, 
-        kv.k_t_l[il], 
-        n_tokens, 
+        ctx,
+        kv.k_t_l[il],
+        n_tokens,
         n_embd_k_gqa,
         n_ctx * ggml_element_size(kv.k_t_l[il]),
         kv_head * ggml_element_size(kv.k_t_l[il])
@@ -5750,24 +5750,24 @@ static void llm_build_kv_store(
     struct ggml_tensor * k_cur_t = ggml_transpose(
         ctx,
         ggml_reshape_3d(
-            ctx, 
-            k_cur, 
-            k_cur->ne[0] * k_cur->ne[1], 
-            k_cur->ne[2], 
+            ctx,
+            k_cur,
+            k_cur->ne[0] * k_cur->ne[1],
+            k_cur->ne[2],
             k_cur->ne[3]
         )
     );
     cb(k_cur_t, "k_cur_t", il);
     ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur_t, k_t_cache_view));
-        
+
     // Value Cache - Store the transposed version for standard attention, and normal version for SparQ Attention
     // compute the transposed [n_tokens, n_embd] V matrix
     assert(v_cur->ne[0] == n_embd_v_gqa && v_cur->ne[1] == n_tokens);
     if (sparq_attn)
     {
         v_cache_view = ggml_view_1d(
-            ctx, 
-            kv.v_l[il], 
+            ctx,
+            kv.v_l[il],
             n_tokens * n_embd_v_gqa,
             ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa) * kv_head
         );
@@ -5779,9 +5779,9 @@ static void llm_build_kv_store(
         cb(v_cur_t, "v_cur_t", il);
 
         v_cache_view = ggml_view_2d(
-            ctx, 
-            kv.v_l[il], 
-            n_tokens, 
+            ctx,
+            kv.v_l[il],
+            n_tokens,
             n_embd_v_gqa,
             n_ctx * ggml_element_size(kv.v_l[il]),
             kv_head * ggml_element_size(kv.v_l[il])
@@ -5791,7 +5791,7 @@ static void llm_build_kv_store(
     }
     cb(v_cache_view, "v_cache_view", il);
 
-    
+
 }
 
 static struct ggml_tensor * llm_build_norm(
@@ -5956,10 +5956,10 @@ static struct ggml_tensor * llm_build_kqv(
     cb(k, "k", il);
 
     // struct ggml_tensor * k = ggml_view_3d(
-    //         ctx, 
+    //         ctx,
     //         kv.k_t_l[il],
-    //         n_kv, 
-    //         n_embd_head_k, 
+    //         n_kv,
+    //         n_embd_head_k,
     //         n_head_kv,
     //         ggml_element_size(kv.k_t_l[il]) * n_ctx,
     //         ggml_element_size(kv.k_t_l[il]) * n_ctx * n_embd_head_k,
@@ -5969,16 +5969,16 @@ static struct ggml_tensor * llm_build_kqv(
 
     // k = ggml_cont(ctx, ggml_transpose(ctx, k));
 
-    
+
 
     struct ggml_tensor * v;
-    
+
     if (sparq_attn) {
         v = ggml_view_3d(
-            ctx, 
+            ctx,
             kv.v_l[il],
-            n_embd_head_v, 
-            n_kv, 
+            n_embd_head_v,
+            n_kv,
             n_head_kv,
             ggml_row_size(kv.v_l[il]->type, n_embd_k_gqa),
             ggml_row_size(kv.v_l[il]->type, n_embd_head_v),
@@ -5987,10 +5987,10 @@ static struct ggml_tensor * llm_build_kqv(
         v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3)); // This line just needs to be for prefill
     } else {
         v = ggml_view_3d(
-            ctx, 
+            ctx,
             kv.v_l[il],
-            n_kv, 
-            n_embd_head_v, 
+            n_kv,
+            n_embd_head_v,
             n_head_kv,
             ggml_element_size(kv.v_l[il]) * n_ctx,
             ggml_element_size(kv.v_l[il]) * n_ctx * n_embd_head_v,
@@ -6006,13 +6006,19 @@ static struct ggml_tensor * llm_build_kqv(
     struct ggml_tensor * kqv;
 
     // ** SPARQ **
-    if (q->ne[1] == -1)
+    if (q->ne[1] == 1)
     {
-        // kqv = ggml_sparq_attn(ctx, q, k, v, seq_len, q->ne[0], 64, 256);
+        // printf("Using sparq-as-dense\n");
+        kqv = ggml_sparq_attn(ctx, q, k, v, kq_mask, seq_len, q->ne[0], INT32_MAX, INT32_MAX);
+        // kqv = ggml_sparq_attn(ctx, q, k, v, kq_mask, seq_len, q->ne[0], 64, 256);
     }
     // ** STANDARD ATTENTION **
     else
     {
+        // printf("DOUG seq_len: %d\n", seq_len);
+        // printf("DOUG q: %d %d %d %d\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
+        // printf("DOUG k: %d %d %d %d\n", k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
+
         // printf("Before kq\n");
         struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
         cb(kq, "kq", il);
