@@ -6,24 +6,8 @@
 #include <iostream>
 #include <iterator>
 
+
 std::vector<P> topk(const float *x, int size, int k, bool use_abs)
-{
-    // Create a vector of indices and absolute values
-    std::vector<P> x_idxs;
-    for (int i = 0; i < size; i++)
-        x_idxs.emplace_back(i, use_abs ? std::abs(x[i]) : x[i]);
-
-    // Sort the vector based on abs values
-    std::sort(x_idxs.begin(), x_idxs.end(), [](P a, P b)
-              { return a.second > b.second; });
-
-    // Keep only the top k pairs
-    if (k < size)
-        x_idxs.resize(k);
-    return x_idxs;
-}
-
-std::vector<P> topk_fast(const float *x, int size, int k, bool use_abs)
 {
     // Create a vector of indices and absolute values
     std::vector<P> x_idxs;
@@ -35,6 +19,7 @@ std::vector<P> topk_fast(const float *x, int size, int k, bool use_abs)
         return x_idxs;
     }
 
+    // NOTE: Consider sorting the output to speed up sparq
     std::nth_element(x_idxs.begin(), x_idxs.begin() + k - 1, x_idxs.end(), [](P a, P b)
                      { return a.second > b.second; });
     x_idxs.resize(k);
@@ -42,38 +27,38 @@ std::vector<P> topk_fast(const float *x, int size, int k, bool use_abs)
 }
 
 // K -- (seq_len, head_dim)
-std::vector<float> step1(const float *q, const float *K, int seq_len, int head_dim, int k)
+std::vector<float> step1(const float *q, const float *K, int K_stride, int seq_len, int head_dim, int k)
 {
     // Output vector
     std::vector<float> out(seq_len, 0.0);
 
-    std::vector<P> idx = topk_fast(q, head_dim, k, true);
+    std::vector<P> idx = topk(q, head_dim, k, true);
     for (int i = 0; i < seq_len; i++)
     {
         for (P p : idx)
         {
             int j = p.first;
-            out[i] += q[j] * K[i * head_dim + j];
+            out[i] += q[j] * K[i * K_stride + j];
         }
     }
 
     return out;
 }
 
-// K -- (head_dim, seq_len)
-std::vector<float> step1_t(const float *q, const float *K_t, int seq_len, int head_dim, int k)
+// K_t -- (head_dim, seq_len)
+std::vector<float> step1_t(const float *q, const float *K_t, int K_t_stride, int seq_len, int head_dim, int k)
 {
     // Output vector
     std::vector<float> out(seq_len, 0.0);
 
-    std::vector<P> idx = topk_fast(q, head_dim, k, true);
+    std::vector<P> idx = topk(q, head_dim, k, true);
 
     for (P p : idx)
     {
         int j = p.first;
         for (int i = 0; i < seq_len; i++)
         {
-            out[i] += q[j] * K_t[j * seq_len + i];
+            out[i] += q[j] * K_t[j * K_t_stride + i];
         }
     }
 
@@ -94,26 +79,34 @@ void softmax(float *x, int size)
         x[i] /= tot;
 }
 
-void sparq(const float *q, const float *K, const float *K_t, const float *V, const float *V_t,
-           int seq_len, int head_dim, int k1, int k2, float *out)
+void sparq(const float *q,
+           const float *K, int K_stride,
+           const float *K_t, int K_t_stride,
+           const float *V, int V_stride,
+           const float *V_t, int V_t_stride,
+           int seq_len, int head_dim,
+           int k1, int k2, float *out)
 {
-    // if (k1 == INT32_MAX && k2 == INT32_MAX) {
-    //     return dense_attention(q, K, K_t, V, V_t, seq_len, head_dim, out);
-    // }
+    if (k1 == 0 && k2 == 0) {
+        return dense_attention(q, K, K_stride, K_t, K_t_stride, V, V_stride, V_t, V_t_stride, seq_len, head_dim, out);
+    }
+
+    k1 = std::min(k1, head_dim);
+    k2 = std::min(k2, seq_len);
 
     // Step 1
     std::vector<float> s_hat;
     if (K_t == nullptr)
     {
-        s_hat = step1(q, K, seq_len, head_dim, k1);
+        s_hat = step1(q, K, K_stride, seq_len, head_dim, k1);
     }
     else
     {
-        s_hat = step1_t(q, K_t, seq_len, head_dim, k1);
+        s_hat = step1_t(q, K_t, K_t_stride, seq_len, head_dim, k1);
     }
 
     // Find top-k2 approximate scores
-    std::vector<P> topk_out = topk_fast(s_hat.data(), s_hat.size(), k2, false);
+    std::vector<P> topk_out = topk(s_hat.data(), s_hat.size(), k2, false);
 
     // Calculate scores for top-k2, s -- (k2, )
     std::vector<float> s(k2, 0.0);
@@ -122,9 +115,9 @@ void sparq(const float *q, const float *K, const float *K_t, const float *V, con
         int idx = topk_out[i].first;
         for (int j = 0; j < head_dim; j++)
         {
-            s[i] += q[j] * K[idx * head_dim + j];
+            s[i] += q[j] * K[idx * K_stride + j];
         }
-        s[i] /= std::sqrt(head_dim);
+        s[i] /= std::sqrt(static_cast<float>(head_dim));
     }
     // softmax(s);
     softmax(s.data(), s.size());
@@ -144,7 +137,7 @@ void sparq(const float *q, const float *K, const float *K_t, const float *V, con
             int &idx = topk_out[i].first;
             for (int j = 0; j < head_dim; j++)
             {
-                out[j] += w * V[idx * head_dim + j];
+                out[j] += w * V[idx * V_stride + j];
             }
         }
     }
@@ -158,7 +151,7 @@ void sparq(const float *q, const float *K, const float *K_t, const float *V, con
             {
                 float &w = s[i];
                 int &idx = topk_out[i].first;
-                out[j] += w * V_t[j * seq_len + idx];
+                out[j] += w * V_t[j * V_t_stride + idx];
             }
         }
     }

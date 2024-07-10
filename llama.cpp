@@ -6059,9 +6059,7 @@ static struct ggml_tensor * llm_build_kqv(
         }
 
 
-        // printf("Before kqv\n");
         kqv = ggml_mul_mat(ctx, v_t, kq);
-        // printf("After kqv\n");
         cb(kqv, "kqv", il);
     }
     struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);

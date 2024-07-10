@@ -13,8 +13,8 @@ void test_step_1()
     std::vector<float> K{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
     std::vector<float> K_t{1, 5, 9, 2, 6, 10, 3, 7, 11, 4, 8, 12};
 
-    std::vector<float> out1 = step1(q.data(), K.data(), 3, 4, 2);
-    std::vector<float> out2 = step1_t(q.data(), K_t.data(), 3, 4, 2);
+    std::vector<float> out1 = step1(q.data(), K.data(), 4, 3, 4, 2);
+    std::vector<float> out2 = step1_t(q.data(), K_t.data(), 3, 3, 4, 2);
 
     std::vector<float> expected{4, -4, -12};
     assert(out1 == expected);
@@ -60,11 +60,11 @@ void test_sparq()
     expected[1] = s[0] * V[3] + s[1] * V[5];
 
     // Check using either K and K_t
-    sparq(q.data(), K.data(), nullptr, V.data(), nullptr, 4, 2, 1, 2, out);
-    sparq(q.data(), K.data(), K_t.data(), V.data(), nullptr, 4, 2, 1, 2, out_t);
+    sparq(q.data(), K.data(), 2, nullptr, -1, V.data(), 2, nullptr, -1, 4, 2, 1, 2, out);
+    sparq(q.data(), K.data(), 2, K_t.data(), 4, V.data(), 2, nullptr, -1, 4, 2, 1, 2, out_t);
 
     // Check using V_t
-    sparq(q.data(), K.data(), nullptr, nullptr, V_t.data(), 4, 2, 1, 2, out_v_t);
+    sparq(q.data(), K.data(), 2, nullptr, -1, nullptr, -1, V_t.data(), 4, 4, 2, 1, 2, out_v_t);
 
     for (int i = 0; i < 2; i++)
     {
@@ -153,9 +153,9 @@ void benchmark_step_1(bool use_transposed)
     auto t0 = clock::now();
     std::vector<float> out;
     if (use_transposed)
-        out = step1_t(q.data(), K.data(), seq_len, head_dim, k1);
+        out = step1_t(q.data(), K.data(), seq_len, seq_len, head_dim, k1);
     else
-        out = step1(q.data(), K.data(), seq_len, head_dim, k1);
+        out = step1(q.data(), K.data(), head_dim, seq_len, head_dim, k1);
     auto duration = clock::now() - t0;
     auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
     std::cerr << "  Size: " << size / 1e9 << " GB"               //
@@ -198,7 +198,7 @@ void benchmark_sparq()
     size += 2 * k2 * head_dim * sizeof(K.front());
 
     auto t0 = clock::now();
-    sparq(q.data(), K.data(), K.data(), V.data(), nullptr, seq_len, head_dim, k1, k2, out.data());
+    sparq(q.data(), K.data(), head_dim, K.data(), seq_len, V.data(), head_dim, nullptr, -1, seq_len, head_dim, k1, k2, out.data());
     auto duration = clock::now() - t0;
     auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(duration).count();
     std::cerr << "  Size: " << size / 1e9 << " GB"               //
