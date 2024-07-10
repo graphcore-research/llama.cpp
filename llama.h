@@ -522,6 +522,18 @@ extern "C" {
     LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
 
+    // Clear the end tokens of the KV cache
+    LLAMA_API void llama_kv_cache_clear_tg_tokens(
+        struct llama_context * ctx, int start);
+
+    // Extend the KV cache with nonsensical data
+    LLAMA_API void llama_kv_cache_extend_prompt(
+        struct llama_context * ctx, 
+        int current_length, 
+        int target_length, 
+        int n_batch, 
+        int n_threads);
+
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // seq_id < 0 : match any sequence
     // p0 < 0     : [0,  p1]

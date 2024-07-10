@@ -2464,6 +2464,22 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     cache.used = 0;
 }
 
+static void llama_kv_cache_clear_tg_tokens(struct llama_kv_cache & cache, int start) {
+    for (int32_t i = start; i < (int32_t) cache.size; ++i) {
+        cache.cells[i].pos = -1;
+        cache.cells[i].seq_id.clear();
+    }
+    cache.head = 0;
+    cache.used = 0;
+}
+
+static void llama_kv_cache_extend_prompt(struct llama_kv_cache & cache, int current_length, int target_length, int n_batch, int n_threads) {
+    for (int32_t i = current_length; i < (int32_t) target_length; ++i) {
+        cache.cells[i].pos = i;
+        cache.cells[i].seq_id.insert(i);
+    }
+}
+
 static bool llama_kv_cache_seq_rm(
         struct llama_kv_cache & cache,
                  llama_seq_id   seq_id,
@@ -6006,7 +6022,7 @@ static struct ggml_tensor * llm_build_kqv(
     struct ggml_tensor * kqv;
 
     // ** SPARQ **
-    if (q->ne[1] == 1)
+    if (sparq_attn && q->ne[1] == 1)
     {
         // printf("Using sparq-as-dense\n");
         kqv = ggml_sparq_attn(ctx, q, k, v, kq_mask, seq_len, q->ne[0], INT32_MAX, INT32_MAX);
@@ -14987,6 +15003,15 @@ int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx) {
 
 void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
+}
+
+void llama_kv_cache_clear_tg_tokens(struct llama_context * ctx, int start) {
+    llama_kv_cache_clear_tg_tokens(ctx->kv_self, start);
+}
+
+void llama_kv_cache_extend_prompt(struct llama_context * ctx, int current_length, int target_length, int n_batch, int n_threads) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+    llama_kv_cache_extend_prompt(ctx->kv_self, current_length, target_length, n_batch, n_threads);
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
