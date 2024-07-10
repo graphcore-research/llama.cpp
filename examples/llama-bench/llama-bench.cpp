@@ -237,6 +237,9 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "f16") {
         return GGML_TYPE_F16;
     }
+    if (s == "f32") {
+        return GGML_TYPE_F32;
+    }
     if (s == "q8_0") {
         return GGML_TYPE_Q8_0;
     }
@@ -1334,7 +1337,7 @@ int main(int argc, char ** argv) {
                 uint64_t t_ns = get_time_ns() - t_start;
                 t.samples_ns.push_back(t_ns);
 
-                // logFile.open(log_directory, std::ios_base::app);
+                logFile.open(log_directory, std::ios_base::app);
                 if (logFile.is_open()) {
                     logFile << "n_prompt = " << t.n_prompt << ": " << t_ns * 1e-9 << "\n";
                     logFile.close();
