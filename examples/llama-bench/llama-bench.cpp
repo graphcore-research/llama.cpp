@@ -183,6 +183,11 @@ struct cmd_params {
     int reps;
     bool verbose;
     output_formats output_format;
+    // SparQ
+    bool sparq;
+    bool sparq_default_layout;
+    int sparq_k1;
+    int sparq_k2;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -203,7 +208,11 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings    */ {false},
     /* reps          */ 5,
     /* verbose       */ false,
-    /* output_format */ MARKDOWN
+    /* output_format */ MARKDOWN,
+    /* sparq */ false,
+    /* sparq_default_layout */ false,
+    /* sparq_k1 */ 32,
+    /* sparq_k2 */ 64
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -273,6 +282,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.verbose = cmd_params_defaults.verbose;
     params.output_format = cmd_params_defaults.output_format;
     params.reps = cmd_params_defaults.reps;
+
+    params.sparq = cmd_params_defaults.sparq;
+    params.sparq_default_layout = cmd_params_defaults.sparq_default_layout;
+    params.sparq_k1 = cmd_params_defaults.sparq_k1;
+    params.sparq_k2 = cmd_params_defaults.sparq_k2;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -462,6 +476,22 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             params.verbose = true;
         } else if (arg == "-f" || arg == "--filename") {
             ++i; // filename is utilised later on
+        } else if (arg == "--sparq") {
+            params.sparq = true;
+        } else if (arg == "--sparq-default-layout") {
+            params.sparq_default_layout = true;
+        } else if (arg == "-k1") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.sparq_k1 = std::stoi(argv[i]);
+        } else if (arg == "-k2") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.sparq_k2 = std::stoi(argv[i]);
         } else {
             invalid_param = true;
             break;
@@ -509,6 +539,11 @@ struct cmd_params_instance {
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
+    // SparQ
+    bool sparq;
+    bool sparq_default_layout;
+    int sparq_k1;
+    int sparq_k2;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -541,6 +576,10 @@ struct cmd_params_instance {
         cparams.type_v = type_v;
         cparams.offload_kqv = !no_kv_offload;
         cparams.embeddings = embeddings;
+        cparams.sparq = sparq;
+        cparams.sparq_default_layout = sparq_default_layout;
+        cparams.sparq_k1 = sparq_k1;
+        cparams.sparq_k2 = sparq_k2;
 
         return cparams;
     }
@@ -583,6 +622,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
+                /* .sparq                = */ params.sparq,
+                /* .sparq_default_layout = */ params.sparq_default_layout,
+                /* .sparq_k1             = */ params.sparq_k1,
+                /* .sparq_k2             = */ params.sparq_k2,
             };
             instances.push_back(instance);
         }
@@ -607,6 +650,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
+                /* .sparq                = */ params.sparq,
+                /* .sparq_default_layout = */ params.sparq_default_layout,
+                /* .sparq_k1             = */ params.sparq_k1,
+                /* .sparq_k2             = */ params.sparq_k2,
             };
             instances.push_back(instance);
         }
@@ -1345,10 +1392,10 @@ int main(int argc, char ** argv) {
 
                 auto kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
                 printf(
-                    "    Repeat %d, n_prompt = %d, token_count = %d: %6.9lf seconds\n", 
-                    i, 
-                    t.n_prompt, 
-                    kv_cache_token_count, 
+                    "    Repeat %d, n_prompt = %d, token_count = %d: %6.9lf seconds\n",
+                    i,
+                    t.n_prompt,
+                    kv_cache_token_count,
                     t_ns * 1e-9
                 );
 
