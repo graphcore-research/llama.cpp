@@ -3705,7 +3705,6 @@ struct ggml_tensor * ggml_sparq_attn(
             struct ggml_tensor * V_t,
             struct ggml_tensor * kq_mask,
             int seq_len,
-            int head_dim,
             int k1,
             int k2)
 {
@@ -3715,7 +3714,7 @@ struct ggml_tensor * ggml_sparq_attn(
     result->op = GGML_OP_SPARQ_ATTN;
     result-> grad = NULL;
 
-    int params[] = { seq_len, head_dim, k1, k2 };
+    int params[] = { seq_len, k1, k2 };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->src[0] = q;
@@ -8171,13 +8170,11 @@ static void ggml_compute_forward_sparq_attn(
 
     // SparQ parameters
     int seq_len = 0;
-    int head_dim = 0;
     int k1 = 0;
     int k2 = 0;
     memcpy(&seq_len, (int *) dst->op_params + 0, sizeof(int));
-    memcpy(&head_dim, (int *) dst->op_params + 1, sizeof(int));
-    memcpy(&k1, (int *) dst->op_params + 2, sizeof(int));
-    memcpy(&k2, (int *) dst->op_params + 3, sizeof(int));
+    memcpy(&k1, (int *) dst->op_params + 1, sizeof(int));
+    memcpy(&k2, (int *) dst->op_params + 2, sizeof(int));
 
     // Get the current head tensors
     // n_threads >= n_heads * batch_size
@@ -8220,7 +8217,7 @@ static void ggml_compute_forward_sparq_attn(
             (float*) ((char*) V_t->data + ith * V_t->nb[2]), // V_t
             V_t->nb[1] / 4,                                  // V_t.stride
             seq_len,
-            head_dim,
+            q->ne[0],
             (float*) ((char*) dst->data + ith * dst->nb[2])  // out
         );
     }
@@ -8241,7 +8238,7 @@ static void ggml_compute_forward_sparq_attn(
     float * out_ptr = (float *) dst->data + ith * dst->ne[0] * dst->ne[1] * sizeof(float);
 
     // kq_mask is currently unused in sparq
-    sparq(q_ptr, K_ptr, NULL, NULL, V_t_ptr, seq_len, head_dim, k1, k2, out_ptr);
+    sparq(q_ptr, K_ptr, NULL, NULL, V_t_ptr, seq_len, q->ne[0], k1, k2, out_ptr);
 }
 
 static void ggml_compute_forward_add_nothing(

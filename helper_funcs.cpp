@@ -4,16 +4,16 @@
 void print_tensor_structure(const ggml_tensor *t, std::string name) {
     printf("\n%s:\n", name.c_str());
     printf(
-        "    elements (ne): %lu x %lu x %lu x %lu\n", 
-        t->ne[0], 
-        t->ne[1], 
+        "    elements (ne): %lu x %lu x %lu x %lu\n",
+        t->ne[0],
+        t->ne[1],
         t->ne[2],
         t->ne[3]
     );
     printf(
-        "       bytes (nb): %lu x %lu x %lu x %lu\n\n", 
-        t->nb[0], 
-        t->nb[1], 
+        "       bytes (nb): %lu x %lu x %lu x %lu\n\n",
+        t->nb[0],
+        t->nb[1],
         t->nb[2],
         t->nb[3]
     );
@@ -32,4 +32,9 @@ void print_tensor_values(const ggml_tensor *t) {
         }
         printf("\n");
     }
+}
+
+void print_contiguity(const ggml_tensor *t, std::string name) {
+    printf("%s is ", name.c_str());
+    printf(ggml_is_contiguous(t) ? "contiguous\n" : "not contiguous\n");
 }

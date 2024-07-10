@@ -272,6 +272,12 @@ extern "C" {
         // currently works only with CPU execution
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+
+        // SparQ (see gpt_params, llama_hparams)
+        bool sparq;
+        bool sparq_default_layout;
+        int sparq_k1;
+        int sparq_k2;
     };
 
     // model quantization parameters
