@@ -5978,17 +5978,11 @@ static struct ggml_tensor * llm_build_kqv(
     // ** MOVED EARLIER **
     GGML_ASSERT(kv.size == n_ctx);
 
-    // So it's defined outside if/else
     struct ggml_tensor * kqv;
 
     // ** SPARQ **
     if (hparams.sparq && q->ne[1] == 1)
     {
-        if (v_t == nullptr) { // TODO: remove this conversion, passing v through directly
-            v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-        }
-
-        // TODO: pass k_t to SparQ
         // [seq_len, head_size, n_head]
         struct ggml_tensor * k_t = hparams.sparq_default_layout
             ? 0
@@ -6003,7 +5997,7 @@ static struct ggml_tensor * llm_build_kqv(
                 0
             );
 
-        kqv = ggml_sparq_attn(ctx, q, k, v_t, kq_mask, seq_len, hparams.sparq_k1, hparams.sparq_k2);
+        kqv = ggml_sparq_attn(ctx, q, k, k_t, v, v_t, kq_mask, seq_len, hparams.sparq_k1, hparams.sparq_k2);
     }
     // ** STANDARD ATTENTION **
     else

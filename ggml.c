@@ -3702,6 +3702,8 @@ struct ggml_tensor * ggml_sparq_attn(
             struct ggml_context * ctx,
             struct ggml_tensor * q,
             struct ggml_tensor * K,
+            struct ggml_tensor * K_t,
+            struct ggml_tensor * V,
             struct ggml_tensor * V_t,
             struct ggml_tensor * kq_mask,
             int seq_len,
@@ -3712,15 +3714,17 @@ struct ggml_tensor * ggml_sparq_attn(
     struct ggml_tensor * result = ggml_dup_tensor(ctx, q);
 
     result->op = GGML_OP_SPARQ_ATTN;
-    result-> grad = NULL;
+    result->grad = NULL;
 
     int params[] = { seq_len, k1, k2 };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->src[0] = q;
     result->src[1] = K;
-    result->src[2] = V_t;
-    result->src[3] = kq_mask;
+    result->src[2] = K_t;
+    result->src[3] = V;
+    result->src[4] = V_t;
+    result->src[5] = kq_mask;
 
     return result;
 }
@@ -8164,10 +8168,6 @@ static void ggml_compute_forward_sparq_attn(
         return;
     }
 
-    // q -- (head_dim, seq_len, num_heads, batch)
-    // sparq should only be called for seq_len = 1
-    GGML_ASSERT(dst->src[0]->ne[1] == 1);
-
     // SparQ parameters
     int seq_len = 0;
     int k1 = 0;
@@ -8176,37 +8176,47 @@ static void ggml_compute_forward_sparq_attn(
     memcpy(&k1, (int *) dst->op_params + 1, sizeof(int));
     memcpy(&k2, (int *) dst->op_params + 2, sizeof(int));
 
-    const int nth = params->nth;
-    const int n_heads = dst->ne[2];
+    struct ggml_tensor * q = dst->src[0];   // (head_dim, 1, num_heads, batch)
+    struct ggml_tensor * K = dst->src[1];   // (head_dim, seq_len, num_heads, batch)
+    struct ggml_tensor * K_t = dst->src[2]; // (seq_len, head_dim, num_heads, batch)
+    struct ggml_tensor * V = dst->src[3];   // (head_dim, seq_len, num_heads, batch)
+    struct ggml_tensor * V_t = dst->src[4]; // (seq_len, head_dim, num_heads, batch)
+    // struct ggml_tensor * kq_mask = dst->src[5];
 
-    struct ggml_tensor * q = dst->src[0];
-    struct ggml_tensor * K = dst->src[1];
-    struct ggml_tensor * V_t = dst->src[2];
-    // struct ggml_tensor * kq_mask = dst->src[3];
-    for (int ith = params->ith; ith < n_heads; ith += nth) {
-        // printf("     q.shape %d %d %d %d\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
-        // printf("     q.stride %d %d %d %d\n\n", q->nb[0], q->nb[1], q->nb[2], q->nb[3]);
-        // printf("     K.shape %d %d %d %d\n", K->ne[0], K->ne[1], K->ne[2], K->ne[3]);
-        // printf("     K.stride %d %d %d %d\n\n", K->nb[0], K->nb[1], K->nb[2], K->nb[3]);
-        // printf("     V_t.shape %d %d %d %d\n", V_t->ne[0], V_t->ne[1], V_t->ne[2], V_t->ne[3]);
-        // printf("     V_t.stride %d %d %d %d\n\n", V_t->nb[0], V_t->nb[1], V_t->nb[2], V_t->nb[3]);
-        // printf("     dst.shape %d %d %d %d\n", dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
-        // printf("     dst.stride %d %d %d %d\n\n", dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
-        GGML_ASSERT(q->type == GGML_TYPE_F32 && K->type == GGML_TYPE_F32 && V_t->type == GGML_TYPE_F32);
-        // All tensors contiguous on first dimension
-        GGML_ASSERT(q->nb[0] == 4 && K->nb[0] == 4 && V_t->nb[0] == 4 && dst->nb[0] == 4);
+    // SparQ should only be called for query seq_len = 1
+    GGML_ASSERT(q->ne[1] == 1);
+
+    const int elem_size = sizeof(float);
+    // Required
+    GGML_ASSERT(q->type == GGML_TYPE_F32 && q->nb[0] == elem_size);
+    GGML_ASSERT(K->type == GGML_TYPE_F32 && K->nb[0] == elem_size);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && dst->nb[0] == elem_size);
+    // Optional
+    if (K_t) {
+        GGML_ASSERT(K_t->type == GGML_TYPE_F32 && K_t->nb[0] == elem_size);
+    }
+    if (V) {
+        GGML_ASSERT(V->type == GGML_TYPE_F32 && V->nb[0] == elem_size);
+    }
+    if (V_t) {
+        GGML_ASSERT(V_t->type == GGML_TYPE_F32 && V_t->nb[0] == elem_size);
+    }
+
+    // Loop over heads, strided by thread index 'ith'
+    const int n_heads = dst->ne[2];
+    for (int ith = params->ith; ith < n_heads; ith += params->nth) {
         sparq(
-            (float*) ((char*) q->data + ith * q->nb[2]),     // q
-            (float*) ((char*) K->data + ith * K->nb[2]),     // K
-            K->nb[1] / 4,                                    // K.stride
-            NULL,                                            // K_t
-            0,                                               // K_t.stride
-            NULL,                                            // V
-            0,                                               // V.stride
-            (float*) ((char*) V_t->data + ith * V_t->nb[2]), // V_t
-            V_t->nb[1] / 4,                                  // V_t.stride
+            (float*) ((char*) q->data + ith * q->nb[2]),               // q
+            (float*) ((char*) K->data + ith * K->nb[2]),               // K
+            K->nb[1] / elem_size,                                      // K.stride
+            K_t ? (float*) ((char*) K_t->data + ith * K_t->nb[2]) : 0, // K_t
+            K_t ? K_t->nb[1] / elem_size : 0,                          // K_t.stride
+            V ? (float*) ((char*) V->data + ith * V->nb[2]) : 0,       // V
+            V ? V->nb[1] / elem_size : 0,                              // V.stride
+            V_t ? (float*) ((char*) V_t->data + ith * V_t->nb[2]) : 0, // V_t
+            V_t ? V_t->nb[1] / elem_size : 0,                          // V_t.stride
             seq_len,
-            q->ne[0],                                        // head_dim
+            q->ne[0],                                                  // head_dim
             k1,
             k2,
             (float*) ((char*) dst->data + ith * dst->nb[2])  // out
