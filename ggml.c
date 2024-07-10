@@ -8183,8 +8183,9 @@ static void ggml_compute_forward_sparq_attn(
     struct ggml_tensor * V_t = dst->src[4]; // (seq_len, head_dim, num_heads, batch)
     // struct ggml_tensor * kq_mask = dst->src[5];
 
-    // SparQ should only be called for query seq_len = 1
+    // SparQ should only be called for query seq_len = 1, batch = 1
     GGML_ASSERT(q->ne[1] == 1);
+    GGML_ASSERT(q->ne[3] == 1);
 
     const int elem_size = sizeof(float);
     // Required
