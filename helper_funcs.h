@@ -5,3 +5,4 @@
 
 void print_tensor_structure(const ggml_tensor *t, std::string name);
 void print_tensor_values(const ggml_tensor *t);
+void print_contiguity(const ggml_tensor *t, std::string name);

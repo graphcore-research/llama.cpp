@@ -87,7 +87,7 @@ void sparq(const float *q,
            int seq_len, int head_dim,
            int k1, int k2, float *out)
 {
-    if (k1 == INT32_MAX && k2 == INT32_MAX) {
+    if (k1 == 0 && k2 == 0) {
         return dense_attention(q, K, K_stride, K_t, K_t_stride, V, V_stride, V_t, V_t_stride, seq_len, head_dim, out);
     }
 

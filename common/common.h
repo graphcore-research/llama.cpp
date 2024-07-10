@@ -163,6 +163,12 @@ struct gpt_params {
     // multimodal models (see examples/llava)
     std::string mmproj = ""; // path to multimodal projector
     std::string image  = ""; // path to an image file
+
+    // SparQ (see llama_hparams, llama_context_params)
+    bool sparq = false;
+    bool sparq_default_layout = false;
+    int sparq_k1 = 32;
+    int sparq_k2 = 64;
 };
 
 bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params);

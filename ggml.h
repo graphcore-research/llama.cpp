@@ -1813,15 +1813,16 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_add_nothing(
             struct ggml_context * ctx,
             struct ggml_tensor * a);
-    
+
     GGML_API struct ggml_tensor * ggml_sparq_attn(
             struct ggml_context * ctx,
             struct ggml_tensor * q,
             struct ggml_tensor * K,
+            struct ggml_tensor * K_t,
+            struct ggml_tensor * V,
             struct ggml_tensor * V_t,
             struct ggml_tensor * kq_mask,
             int seq_len,
-            int head_dim,
             int k1,
             int k2);
 
