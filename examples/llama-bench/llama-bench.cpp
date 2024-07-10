@@ -1173,7 +1173,6 @@ static void llama_null_log_callback(enum ggml_log_level level, const char * text
     (void) user_data;
 }
 
-
 int main(int argc, char ** argv) {
     // try to set locale for unicode characters in markdown
     setlocale(LC_CTYPE, ".UTF-8");
@@ -1380,6 +1379,7 @@ int main(int argc, char ** argv) {
                 auto delta = t.n_prompt - kv_cache_token_count;
                 uint64_t prompt_t_start = get_time_ns();
                 test_prompt(ctx, delta, 0, t.n_batch, t.n_threads);
+                // llama_kv_cache_extend_prompt(ctx, kv_cache_token_count, t.n_prompt, t.n_batch, t.n_threads);
                 uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
                 kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
                 printf(

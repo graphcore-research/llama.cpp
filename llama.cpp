@@ -2461,6 +2461,15 @@ static void llama_kv_cache_clear_tg_tokens(struct llama_kv_cache & cache, int st
     cache.used = 0;
 }
 
+static void llama_kv_cache_extend_prompt(struct llama_kv_cache & cache, int current_length, int target_length, int n_batch, int n_threads) {
+    printf("Wow...\n");
+    for (int32_t i = current_length; i < (int32_t) target_length; ++i) {
+        cache.cells[i].pos = i;
+        cache.cells[i].seq_id.insert(i);
+        // cache.cells[i].seq_id.clear();
+    }
+}
+
 static bool llama_kv_cache_seq_rm(
         struct llama_kv_cache & cache,
                  llama_seq_id   seq_id,
@@ -14873,6 +14882,11 @@ void llama_kv_cache_clear(struct llama_context * ctx) {
 
 void llama_kv_cache_clear_tg_tokens(struct llama_context * ctx, int start) {
     llama_kv_cache_clear_tg_tokens(ctx->kv_self, start);
+}
+
+void llama_kv_cache_extend_prompt(struct llama_context * ctx, int current_length, int target_length, int n_batch, int n_threads) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+    llama_kv_cache_extend_prompt(ctx->kv_self, current_length, target_length, n_batch, n_threads);
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {

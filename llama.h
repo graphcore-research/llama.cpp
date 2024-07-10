@@ -525,6 +525,9 @@ extern "C" {
     LLAMA_API void llama_kv_cache_clear_tg_tokens(
             struct llama_context * ctx, int);
 
+    LLAMA_API void llama_kv_cache_extend_prompt(
+        struct llama_context * ctx, int, int, int, int);
+
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // seq_id < 0 : match any sequence
     // p0 < 0     : [0,  p1]
