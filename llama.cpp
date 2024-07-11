@@ -2475,9 +2475,14 @@ static void llama_kv_cache_clear_tg_tokens(struct llama_kv_cache & cache, int st
 }
 
 static void llama_kv_cache_extend_prompt(struct llama_kv_cache & cache, int current_length, int target_length, int n_batch, int n_threads) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> real_dist(-1.0, 1.0);
     for (int32_t i = current_length; i < (int32_t) target_length; ++i) {
+        double random_double = real_dist(gen);
         cache.cells[i].pos = i;
-        cache.cells[i].seq_id.insert(i);
+        cache.cells[i].seq_id.insert(random_double);
+
     }
 }
 
@@ -15006,6 +15011,7 @@ void llama_kv_cache_clear_tg_tokens(struct llama_context * ctx, int start) {
 
 void llama_kv_cache_extend_prompt(struct llama_context * ctx, int current_length, int target_length, int n_batch, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
+        // printf("%d\n", llama_kv_cache_seq_pos_max(ctx->kv_self, 0));
     llama_kv_cache_extend_prompt(ctx->kv_self, current_length, target_length, n_batch, n_threads);
 }
 
