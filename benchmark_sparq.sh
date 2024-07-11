@@ -13,7 +13,7 @@ if [[ $1 == "--profile" ]] ; then
 
     make clean
     rm gmon.out || true
-    make LLAMA_GPROF=1 -j llama-bench
+    make LLAMA_FAST=1 LLAMA_GPROF=1 -j llama-bench
 
     ./llama-bench ${FLAGS_PROFILE} ${FLAGS_SPARQ}
     gprof llama-bench > timing-benchmarks/profile.txt
@@ -21,7 +21,7 @@ else
     echo "# Benchmarking..."
 
     make clean
-    make -j llama-bench
+    make LLAMA_FAST=1 -j llama-bench
 
     ./llama-bench ${FLAGS_BENCHMARK}
     ./llama-bench ${FLAGS_BENCHMARK} --sparq -k1 0 -k2 0
