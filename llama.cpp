@@ -2474,14 +2474,46 @@ static void llama_kv_cache_clear_tg_tokens(struct llama_kv_cache & cache, int st
     cache.used = 0;
 }
 
-static void llama_kv_cache_extend_prompt(struct llama_kv_cache & cache, int current_length, int target_length, int n_batch, int n_threads) {
+
+static void llama_kv_cache_extend_prompt(struct llama_kv_cache & cache, int current_length, int target_length, int n_batch, int n_threads, int layers) {
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<double> real_dist(-1.0, 1.0);
+    std::uniform_real_distribution<float> dist(-1.0, 1.0);
+
+    for (int il = 0; il < layers; il++) {
+        for (int idx0 = 0; idx0 < cache.k_l[il]->ne[0]; idx0++) {
+            for (int idx1 = 0; idx1 < cache.k_l[il]->ne[1]; idx1++) {
+                for (int idx2 = 0; idx2 < cache.k_l[il]->ne[2]; idx2++) {
+                    for (int idx3 = 0; idx3 < cache.k_l[il]->ne[3]; idx3++) {
+                        ggml_set_f32_nd(cache.k_l[il], idx0, idx1, idx2, idx3, dist(gen));
+                    }
+                }
+            }
+        }
+        for (int idx0 = 0; idx0 < cache.k_t_l[il]->ne[0]; idx0++) {
+            for (int idx1 = 0; idx1 < cache.k_t_l[il]->ne[1]; idx1++) {
+                for (int idx2 = 0; idx2 < cache.k_t_l[il]->ne[2]; idx2++) {
+                    for (int idx3 = 0; idx3 < cache.k_t_l[il]->ne[3]; idx3++) {
+                        ggml_set_f32_nd(cache.k_t_l[il], idx0, idx1, idx2, idx3, dist(gen));
+                    }
+                }
+            }
+        }
+        for (int idx0 = 0; idx0 < cache.v_l[il]->ne[0]; idx0++) {
+            for (int idx1 = 0; idx1 < cache.v_l[il]->ne[1]; idx1++) {
+                for (int idx2 = 0; idx2 < cache.v_l[il]->ne[2]; idx2++) {
+                    for (int idx3 = 0; idx3 < cache.v_l[il]->ne[3]; idx3++) {
+                        ggml_set_f32_nd(cache.v_l[il], idx0, idx1, idx2, idx3, dist(gen));
+                    }
+                }
+            }
+        }
+    }
+
+    // this for loop (or something like it) seems to be necessary for determining the current sequence length
     for (int32_t i = current_length; i < (int32_t) target_length; ++i) {
-        double random_double = real_dist(gen);
         cache.cells[i].pos = i;
-        cache.cells[i].seq_id.insert(random_double);
+        cache.cells[i].seq_id.insert(i);
 
     }
 }
@@ -15011,8 +15043,7 @@ void llama_kv_cache_clear_tg_tokens(struct llama_context * ctx, int start) {
 
 void llama_kv_cache_extend_prompt(struct llama_context * ctx, int current_length, int target_length, int n_batch, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
-        // printf("%d\n", llama_kv_cache_seq_pos_max(ctx->kv_self, 0));
-    llama_kv_cache_extend_prompt(ctx->kv_self, current_length, target_length, n_batch, n_threads);
+    llama_kv_cache_extend_prompt(ctx->kv_self, current_length, target_length, n_batch, n_threads, ctx->model.hparams.n_layer);
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
