@@ -20,6 +20,7 @@ using P = std::pair<int, float>;
 std::vector<P> sparq_topk(const float *x, int size, int k, bool use_abs) {
     // Create a vector of indices and absolute values
     std::vector<P> x_idxs;
+    x_idxs.reserve(size);
     for (int i = 0; i < size; i++) {
         x_idxs.emplace_back(i, use_abs ? std::abs(x[i]) : x[i]);
     }
