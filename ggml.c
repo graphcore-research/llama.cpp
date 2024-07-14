@@ -8187,41 +8187,58 @@ static void ggml_compute_forward_sparq_attn(
     GGML_ASSERT(q->ne[1] == 1);
     GGML_ASSERT(q->ne[3] == 1);
 
-    const int elem_size = sizeof(float);
-    // Required
-    GGML_ASSERT(q->type == GGML_TYPE_F32 && q->nb[0] == elem_size);
-    GGML_ASSERT(K->type == GGML_TYPE_F32 && K->nb[0] == elem_size);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32 && dst->nb[0] == elem_size);
-    // Optional
-    if (K_t) {
-        GGML_ASSERT(K_t->type == GGML_TYPE_F32 && K_t->nb[0] == elem_size);
-    }
-    if (V) {
-        GGML_ASSERT(V->type == GGML_TYPE_F32 && V->nb[0] == elem_size);
-    }
-    if (V_t) {
-        GGML_ASSERT(V_t->type == GGML_TYPE_F32 && V_t->nb[0] == elem_size);
-    }
+    // Check tensors
+    //   {q, dst} should be F32 and contiguous on dim[0]
+    //   {K, K_t, V, V_t} should be the same dtype (F32 or F16) and contiguous on dim[0]
+    GGML_ASSERT(q->type == GGML_TYPE_F32 && q->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && dst->nb[0] == sizeof(float));
+    const enum ggml_type kv_type = K->type;
+    const unsigned kv_elem_size = ggml_type_size(kv_type);
+    GGML_ASSERT(kv_type == GGML_TYPE_F32 || kv_type == GGML_TYPE_F16);
+    GGML_ASSERT(K->nb[0] == kv_elem_size);
+    GGML_ASSERT((!K_t) || (K_t->type == kv_type && K_t->nb[0] == kv_elem_size));
+    GGML_ASSERT((!V) || (V->type == kv_type && V->nb[0] == kv_elem_size));
+    GGML_ASSERT((!V_t) || (V_t->type == kv_type && V_t->nb[0] == kv_elem_size));
 
     // Loop over heads, strided by thread index 'ith'
     const int n_heads = dst->ne[2];
+    const int head_dim = q->ne[0];
     for (int ith = params->ith; ith < n_heads; ith += params->nth) {
-        sparq(
-            (float*) ((char*) q->data + ith * q->nb[2]),               // q
-            (float*) ((char*) K->data + ith * K->nb[2]),               // K
-            K->nb[1] / elem_size,                                      // K.stride
-            K_t ? (float*) ((char*) K_t->data + ith * K_t->nb[2]) : 0, // K_t
-            K_t ? K_t->nb[1] / elem_size : 0,                          // K_t.stride
-            V ? (float*) ((char*) V->data + ith * V->nb[2]) : 0,       // V
-            V ? V->nb[1] / elem_size : 0,                              // V.stride
-            V_t ? (float*) ((char*) V_t->data + ith * V_t->nb[2]) : 0, // V_t
-            V_t ? V_t->nb[1] / elem_size : 0,                          // V_t.stride
-            seq_len,
-            q->ne[0],                                                  // head_dim
-            k1,
-            k2,
-            (float*) ((char*) dst->data + ith * dst->nb[2])  // out
-        );
+        if (kv_type == GGML_TYPE_F32) {
+            sparq(
+                (float*) ((char*) q->data + ith * q->nb[2]),               // q
+                (float*) ((char*) K->data + ith * K->nb[2]),               // K
+                K->nb[1] / kv_elem_size,                                   // K.stride
+                K_t ? (float*) ((char*) K_t->data + ith * K_t->nb[2]) : 0, // K_t
+                K_t ? K_t->nb[1] / kv_elem_size : 0,                       // K_t.stride
+                V ? (float*) ((char*) V->data + ith * V->nb[2]) : 0,       // V
+                V ? V->nb[1] / kv_elem_size : 0,                           // V.stride
+                V_t ? (float*) ((char*) V_t->data + ith * V_t->nb[2]) : 0, // V_t
+                V_t ? V_t->nb[1] / kv_elem_size : 0,                       // V_t.stride
+                seq_len,
+                head_dim,
+                k1,
+                k2,
+                (float*) ((char*) dst->data + ith * dst->nb[2])            // out
+            );
+        } else {
+            sparq_halfp(
+                (float*) ((char*) q->data + ith * q->nb[2]),                    // q
+                (sparq_half*) ((char*) K->data + ith * K->nb[2]),               // K
+                K->nb[1] / kv_elem_size,                                        // K.stride
+                K_t ? (sparq_half*) ((char*) K_t->data + ith * K_t->nb[2]) : 0, // K_t
+                K_t ? K_t->nb[1] / kv_elem_size : 0,                            // K_t.stride
+                V ? (sparq_half*) ((char*) V->data + ith * V->nb[2]) : 0,       // V
+                V ? V->nb[1] / kv_elem_size : 0,                                // V.stride
+                V_t ? (sparq_half*) ((char*) V_t->data + ith * V_t->nb[2]) : 0, // V_t
+                V_t ? V_t->nb[1] / kv_elem_size : 0,                            // V_t.stride
+                seq_len,
+                head_dim,
+                k1,
+                k2,
+                (float*) ((char*) dst->data + ith * dst->nb[2])                 // out
+            );
+        }
     }
 }
 
