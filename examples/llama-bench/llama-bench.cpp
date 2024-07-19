@@ -9,7 +9,10 @@
 #include <cstring>
 #include <ctime>
 #include <cstdlib>
+#include <fstream>
 #include <iterator>
+#include <iomanip>
+#include <iostream>
 #include <map>
 #include <numeric>
 #include <regex>
@@ -180,6 +183,11 @@ struct cmd_params {
     int reps;
     bool verbose;
     output_formats output_format;
+    // SparQ
+    bool sparq;
+    bool sparq_default_layout;
+    int sparq_k1;
+    int sparq_k2;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -200,7 +208,11 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings    */ {false},
     /* reps          */ 5,
     /* verbose       */ false,
-    /* output_format */ MARKDOWN
+    /* output_format */ MARKDOWN,
+    /* sparq */ false,
+    /* sparq_default_layout */ false,
+    /* sparq_k1 */ 32,
+    /* sparq_k2 */ 64
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -233,6 +245,9 @@ static void print_usage(int /* argc */, char ** argv) {
 static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "f16") {
         return GGML_TYPE_F16;
+    }
+    if (s == "f32") {
+        return GGML_TYPE_F32;
     }
     if (s == "q8_0") {
         return GGML_TYPE_Q8_0;
@@ -267,6 +282,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.verbose = cmd_params_defaults.verbose;
     params.output_format = cmd_params_defaults.output_format;
     params.reps = cmd_params_defaults.reps;
+
+    params.sparq = cmd_params_defaults.sparq;
+    params.sparq_default_layout = cmd_params_defaults.sparq_default_layout;
+    params.sparq_k1 = cmd_params_defaults.sparq_k1;
+    params.sparq_k2 = cmd_params_defaults.sparq_k2;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -454,6 +474,24 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
+        } else if (arg == "-f" || arg == "--filename") {
+            ++i; // filename is utilised later on
+        } else if (arg == "--sparq") {
+            params.sparq = true;
+        } else if (arg == "--sparq-default-layout") {
+            params.sparq_default_layout = true;
+        } else if (arg == "-k1") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.sparq_k1 = std::stoi(argv[i]);
+        } else if (arg == "-k2") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.sparq_k2 = std::stoi(argv[i]);
         } else {
             invalid_param = true;
             break;
@@ -501,6 +539,11 @@ struct cmd_params_instance {
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
+    // SparQ
+    bool sparq;
+    bool sparq_default_layout;
+    int sparq_k1;
+    int sparq_k2;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -533,6 +576,10 @@ struct cmd_params_instance {
         cparams.type_v = type_v;
         cparams.offload_kqv = !no_kv_offload;
         cparams.embeddings = embeddings;
+        cparams.sparq = sparq;
+        cparams.sparq_default_layout = sparq_default_layout;
+        cparams.sparq_k1 = sparq_k1;
+        cparams.sparq_k2 = sparq_k2;
 
         return cparams;
     }
@@ -562,7 +609,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_prompt,
-                /* .n_gen        = */ 0,
+                /* .n_gen        = */ 1,
                 /* .n_batch      = */ nb,
                 /* .n_ubatch     = */ nub,
                 /* .type_k       = */ tk,
@@ -575,6 +622,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
+                /* .sparq                = */ params.sparq,
+                /* .sparq_default_layout = */ params.sparq_default_layout,
+                /* .sparq_k1             = */ params.sparq_k1,
+                /* .sparq_k2             = */ params.sparq_k2,
             };
             instances.push_back(instance);
         }
@@ -599,6 +650,10 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
+                /* .sparq                = */ params.sparq,
+                /* .sparq_default_layout = */ params.sparq_default_layout,
+                /* .sparq_k1             = */ params.sparq_k1,
+                /* .sparq_k2             = */ params.sparq_k2,
             };
             instances.push_back(instance);
         }
@@ -1212,69 +1267,202 @@ int main(int argc, char ** argv) {
             exit(1);
     }
     p->fout = stdout;
-    p->print_header(params);
+    // p->print_header(params);
 
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
     llama_model * lmodel = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
 
-    for (const auto & inst : params_instances) {
-        // keep the same model between tests when possible
-        if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
-            if (lmodel) {
-                llama_free_model(lmodel);
-            }
-
-            lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
-            if (lmodel == NULL) {
-                fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+    // define log filename
+    std::time_t now = std::time(nullptr);
+    std::tm* local_time = std::localtime(&now);
+    std::stringstream ss;
+    ss << std::put_time(local_time, "%Y-%m-%d_%H:%M:%S");
+    std::string log_filename = "benchmarking_log_" + ss.str();
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-f" || arg == "--filename") {
+            if (i + 1 < argc) {
+                log_filename = argv[i + 1];
+                break;
+            } else {
+                std::cerr << "Error: Argument 'filename' requires a value." << std::endl;
                 return 1;
             }
-            prev_inst = &inst;
+        }
+    }
+    printf("Log Filename: %s\n\n", log_filename.c_str());
+
+    // create logging file to save data to
+    std::string log_directory = "timing-benchmarks/" + log_filename + ".txt";
+    std::ofstream logFile(log_directory, std::ios_base::app);
+    logFile.open(log_directory, std::ios_base::app);
+    if (logFile.is_open()) {
+        logFile.close();
+    }
+
+    // load the first model only to prevent clearing prompt caches
+    // TODO: make this benchmarking work with multiple models
+    const auto & params_inst = params_instances[0];
+    if (!lmodel || !prev_inst || !params_inst.equal_mparams(*prev_inst)) {
+        if (lmodel) {
+            llama_free_model(lmodel);
         }
 
-        llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
-        if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
-            llama_free_model(lmodel);
+        lmodel = llama_load_model_from_file(params_inst.model.c_str(), params_inst.to_llama_mparams());
+        if (lmodel == NULL) {
+            fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params_inst.model.c_str());
             return 1;
         }
+        prev_inst = &params_inst;
+    }
 
+    // adapt the maximum sequence length to be the max sequence of interest
+    auto llama_params = params_inst.to_llama_cparams();
+    for (const auto & inst : params_instances) {
+        if (llama_params.n_ctx < inst.to_llama_cparams().n_ctx) {
+            llama_params.n_ctx = inst.to_llama_cparams().n_ctx;
+        }
+    }
+    llama_context * ctx = llama_new_context_with_model(lmodel, llama_params);
+    if (ctx == NULL) {
+        fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params_inst.model.c_str());
+        llama_free_model(lmodel);
+        return 1;
+    }
+
+    // loop through parameters, generating prompts of desired lengths
+    for (const auto & inst : params_instances) {
+
+        int kv_cache_token_count;
         test t(inst, lmodel, ctx);
 
-        llama_kv_cache_clear(ctx);
-
-        // warmup run
         if (t.n_prompt > 0) {
-            //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-            test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-        }
-        if (t.n_gen > 0) {
-            test_gen(ctx, 1, 0, t.n_threads);
-        }
 
-        for (int i = 0; i < params.reps; i++) {
-            llama_kv_cache_clear(ctx);
-
-            uint64_t t_start = get_time_ns();
-            if (t.n_prompt > 0) {
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+            kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+            if (kv_cache_token_count < t.n_prompt) {
+                // extend prompt length
+                uint64_t prompt_t_start = get_time_ns();
+                llama_kv_cache_extend_prompt(ctx, kv_cache_token_count, t.n_prompt, t.n_batch, t.n_threads);
+                uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
+                printf(
+                    "Extended prompt length by %d (new prompt length = %d) in %6.9lf seconds\n",
+                    t.n_prompt - kv_cache_token_count,
+                    llama_get_kv_cache_token_count(ctx),
+                    prompt_t_ns * 1e-9
+                );
+                kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+            } else if (kv_cache_token_count > t.n_prompt) {
+                // truncate prompt length
+                uint64_t prompt_t_start = get_time_ns();
+                llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
+                uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
+                printf(
+                    "Truncated prompt length to %d tokens in %6.9lf seconds\n",
+                    llama_get_kv_cache_token_count(ctx),
+                    prompt_t_ns * 1e-9
+                );
+            } else {
+                printf("No changes to prompt length required\n");
             }
+
+            // warmup run (this might not be doing much)
             if (t.n_gen > 0) {
-                test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+                test_gen(ctx, 1, 0, t.n_threads);
             }
+            llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
 
-            uint64_t t_ns = get_time_ns() - t_start;
-            t.samples_ns.push_back(t_ns);
+            // run through multiple iterations of the same prompt length
+            for (int i = 0; i < params.reps; i++) {
+
+                uint64_t t_start = get_time_ns();
+                if (t.n_gen > 0) {
+                    test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+                }
+
+                uint64_t t_ns = get_time_ns() - t_start;
+                t.samples_ns.push_back(t_ns);
+
+                logFile.open(log_directory, std::ios_base::app);
+                if (logFile.is_open()) {
+                    logFile << "n_prompt = " << t.n_prompt << ": " << t_ns * 1e-9 << "\n";
+                    logFile.close();
+                }
+
+                auto kv_cache_token_count = llama_get_kv_cache_token_count(ctx);
+                printf(
+                    "    Repeat %d, n_prompt = %d, token_count = %d: %6.9lf seconds\n",
+                    i,
+                    t.n_prompt,
+                    kv_cache_token_count,
+                    t_ns * 1e-9
+                );
+
+                llama_kv_cache_clear_tg_tokens(ctx, t.n_prompt);
+            }
         }
-
-        p->print_test(t);
-
-        llama_print_timings(ctx);
-
-        llama_free(ctx);
     }
+
+
+
+
+    // for (const auto & inst : params_instances) {
+    //     // keep the same model between tests when possible
+    //     if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
+    //         if (lmodel) {
+    //             llama_free_model(lmodel);
+    //         }
+
+    //         lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
+    //         if (lmodel == NULL) {
+    //             fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+    //             return 1;
+    //         }
+    //         prev_inst = &inst;
+    //     }
+
+    //     llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
+    //     if (ctx == NULL) {
+    //         fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
+    //         llama_free_model(lmodel);
+    //         return 1;
+    //     }
+
+    //     test t(inst, lmodel, ctx);
+
+    //     llama_kv_cache_clear(ctx);
+
+    //     // warmup run
+    //     if (t.n_prompt > 0) {
+    //         //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
+    //         test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+    //     }
+    //     if (t.n_gen > 0) {
+    //         test_gen(ctx, 1, 0, t.n_threads);
+    //     }
+
+    //     for (int i = 0; i < params.reps; i++) {
+    //         llama_kv_cache_clear(ctx);
+
+    //         uint64_t t_start = get_time_ns();
+    //         if (t.n_prompt > 0) {
+    //             test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+    //         }
+    //         if (t.n_gen > 0) {
+    //             test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+    //         }
+
+    //         uint64_t t_ns = get_time_ns() - t_start;
+    //         t.samples_ns.push_back(t_ns);
+    //     }
+
+    //     p->print_test(t);
+
+    //     llama_print_timings(ctx);
+
+    //     llama_free(ctx);
+    // }
 
     llama_free_model(lmodel);
 

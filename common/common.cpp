@@ -1219,6 +1219,30 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     // End of Parse args for logging parameters
 #endif // LOG_DISABLE_LOGS
+    if (arg == "--sparq") {
+        params.sparq = true;
+        return true;
+    }
+    if (arg == "--sparq-default-layout") {
+        params.sparq_default_layout = true;
+        return true;
+    }
+    if (arg == "-k1") {
+        if (++i >= argc) {
+            invalid_param = true;
+            return true;
+        }
+        params.sparq_k1 = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-k2") {
+        if (++i >= argc) {
+            invalid_param = true;
+            return true;
+        }
+        params.sparq_k2 = std::stoi(argv[i]);
+        return true;
+    }
 
     return false;
 }
@@ -1464,6 +1488,15 @@ void gpt_print_usage(int /*argc*/, char ** argv, const gpt_params & params) {
     printf("                        types: int, float, bool. example: --override-kv tokenizer.ggml.add_bos_token=bool:false\n");
     printf("  -ptc N, --print-token-count N\n");
     printf("                        print token count every N tokens (default: %d)\n", params.n_print);
+    // SparQ
+    printf("  --sparq\n");
+    printf("                        enable sparq (default: false)\n");
+    printf("  --sparq-default-layout\n");
+    printf("                        use the default tensor layout with SparQ (V_T not V & only K no K_T) (default: false)\n");
+    printf("  -k1\n");
+    printf("                        sparq k1 (default: %d), set to 0 for dense\n", params.sparq_k1);
+    printf("  -k2\n");
+    printf("                        sparq k2 (default: %d), set to 0 for dense\n", params.sparq_k2);
     printf("\n");
 #ifndef LOG_DISABLE_LOGS
     log_print_usage();
@@ -1678,6 +1711,11 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+
+    cparams.sparq = params.sparq;
+    cparams.sparq_default_layout = params.sparq_default_layout;
+    cparams.sparq_k1 = params.sparq_k1;
+    cparams.sparq_k2 = params.sparq_k2;
 
     return cparams;
 }

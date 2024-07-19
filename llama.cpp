@@ -6,6 +6,7 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "helper_funcs.h"
 
 #ifdef GGML_USE_CUDA
 #  include "ggml-cuda.h"
@@ -1745,6 +1746,12 @@ struct llama_hparams {
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
+    // SparQ (see gpt_params, llama_context_params) -- these don't belong here, but it helps with plumbing
+    bool sparq = false;
+    bool sparq_default_layout = false;
+    int sparq_k1 = 32;
+    int sparq_k2 = 64;
+
     bool operator!=(const llama_hparams & other) const {
         if (this->vocab_only    != other.vocab_only)    return true;
         if (this->n_vocab       != other.n_vocab)       return true;
@@ -1945,6 +1952,7 @@ struct llama_kv_cache {
     std::vector<llama_kv_cell> cells;
 
     std::vector<struct ggml_tensor *> k_l; // per layer
+    std::vector<struct ggml_tensor *> k_t_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
 
     std::vector<struct ggml_context *> ctxs;
@@ -2282,7 +2290,8 @@ static bool llama_kv_cache_init(
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
         struct ggml_init_params params = {
-            /*.mem_size   =*/ 2u*n_layers*ggml_tensor_overhead(),
+            /*.mem_size   =*/ 3u*n_layers*ggml_tensor_overhead(), // Increased memory for SparQ Attention's K transposed cache
+            // /*.mem_size   =*/ 2u*n_layers*ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
@@ -2296,15 +2305,19 @@ static bool llama_kv_cache_init(
     }
 
     cache.k_l.reserve(n_layer);
+    cache.k_t_l.reserve(n_layer);
     cache.v_l.reserve(n_layer);
 
     for (int i = 0; i < (int) n_layer; i++) {
         struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
+        ggml_tensor * k_t = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
         ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
         ggml_format_name(k, "cache_k_l%d", i);
+        ggml_format_name(k_t, "cache_k_t_l%d", i);
         ggml_format_name(v, "cache_v_l%d", i);
         cache.k_l.push_back(k);
+        cache.k_t_l.push_back(k_t);
         cache.v_l.push_back(v);
     }
 
@@ -2450,6 +2463,59 @@ static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     }
     cache.head = 0;
     cache.used = 0;
+}
+
+static void llama_kv_cache_clear_tg_tokens(struct llama_kv_cache & cache, int start) {
+    for (int32_t i = start; i < (int32_t) cache.size; ++i) {
+        cache.cells[i].pos = -1;
+        cache.cells[i].seq_id.clear();
+    }
+    cache.head = 0;
+    cache.used = 0;
+}
+
+
+static void llama_kv_cache_extend_prompt(struct llama_kv_cache & cache, int current_length, int target_length, int n_batch, int n_threads, int layers) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dist(-1.0, 1.0);
+
+    for (int il = 0; il < layers; il++) {
+        for (int idx0 = 0; idx0 < cache.k_l[il]->ne[0]; idx0++) {
+            for (int idx1 = 0; idx1 < cache.k_l[il]->ne[1]; idx1++) {
+                for (int idx2 = 0; idx2 < cache.k_l[il]->ne[2]; idx2++) {
+                    for (int idx3 = 0; idx3 < cache.k_l[il]->ne[3]; idx3++) {
+                        ggml_set_f32_nd(cache.k_l[il], idx0, idx1, idx2, idx3, dist(gen));
+                    }
+                }
+            }
+        }
+        for (int idx0 = 0; idx0 < cache.k_t_l[il]->ne[0]; idx0++) {
+            for (int idx1 = 0; idx1 < cache.k_t_l[il]->ne[1]; idx1++) {
+                for (int idx2 = 0; idx2 < cache.k_t_l[il]->ne[2]; idx2++) {
+                    for (int idx3 = 0; idx3 < cache.k_t_l[il]->ne[3]; idx3++) {
+                        ggml_set_f32_nd(cache.k_t_l[il], idx0, idx1, idx2, idx3, dist(gen));
+                    }
+                }
+            }
+        }
+        for (int idx0 = 0; idx0 < cache.v_l[il]->ne[0]; idx0++) {
+            for (int idx1 = 0; idx1 < cache.v_l[il]->ne[1]; idx1++) {
+                for (int idx2 = 0; idx2 < cache.v_l[il]->ne[2]; idx2++) {
+                    for (int idx3 = 0; idx3 < cache.v_l[il]->ne[3]; idx3++) {
+                        ggml_set_f32_nd(cache.v_l[il], idx0, idx1, idx2, idx3, dist(gen));
+                    }
+                }
+            }
+        }
+    }
+
+    // this for loop (or something like it) seems to be necessary for determining the current sequence length
+    for (int32_t i = current_length; i < (int32_t) target_length; ++i) {
+        cache.cells[i].pos = i;
+        cache.cells[i].seq_id.insert(i);
+
+    }
 }
 
 static bool llama_kv_cache_seq_rm(
@@ -5707,23 +5773,69 @@ static void llm_build_kv_store(
 
     GGML_ASSERT(kv.size == n_ctx);
 
-    // compute the transposed [n_tokens, n_embd] V matrix
-    assert(v_cur->ne[0] == n_embd_v_gqa && v_cur->ne[1] == n_tokens);
-    struct ggml_tensor * v_cur_t = ggml_transpose(ctx, v_cur);
-    cb(v_cur_t, "v_cur_t", il);
-
-    struct ggml_tensor * k_cache_view = ggml_view_1d(ctx, kv.k_l[il], n_tokens*n_embd_k_gqa,
-            (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
+    // Key Cache - same for both standard and SparQ Attention
+    struct ggml_tensor * k_cache_view = ggml_view_1d(
+        ctx,
+        kv.k_l[il],
+        n_tokens * n_embd_k_gqa,
+        ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa) * kv_head
+    );
     cb(k_cache_view, "k_cache_view", il);
+    ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur, k_cache_view)); // important: storing RoPE-ed version of K in the KV cache!
 
-    struct ggml_tensor * v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
-            (  n_ctx)*ggml_element_size(kv.v_l[il]),
-            (kv_head)*ggml_element_size(kv.v_l[il]));
-    cb(v_cache_view, "v_cache_view", il);
+    if (hparams.sparq && !hparams.sparq_default_layout)
+    {
+        // Key Transposed Cache - Useful for Step 1 of SparQ Attention
+        struct ggml_tensor * k_t_cache_view = ggml_view_2d(
+            ctx,
+            kv.k_t_l[il],
+            n_tokens,
+            n_embd_k_gqa,
+            n_ctx * ggml_element_size(kv.k_t_l[il]),
+            kv_head * ggml_element_size(kv.k_t_l[il])
+        );
+        cb(k_t_cache_view, "k_t_cache_view", il);
+        struct ggml_tensor * k_cur_t = ggml_transpose(
+            ctx,
+            ggml_reshape_3d(
+                ctx,
+                k_cur,
+                k_cur->ne[0] * k_cur->ne[1],
+                k_cur->ne[2],
+                k_cur->ne[3]
+            )
+        );
+        cb(k_cur_t, "k_cur_t", il);
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur_t, k_t_cache_view));
 
-    // important: storing RoPE-ed version of K in the KV cache!
-    ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur,   k_cache_view));
-    ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
+        // Value (untransposed) Cache - Useful for Step 2 of SparQ attention
+        struct ggml_tensor * v_cache_view = ggml_view_1d(
+            ctx,
+            kv.v_l[il],
+            n_tokens * n_embd_v_gqa,
+            ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa) * kv_head
+        );
+        cb(v_cache_view, "v_cache_view", il);
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
+    }
+    else
+    {
+        // compute the transposed [n_tokens, n_embd] V matrix
+        assert(v_cur->ne[0] == n_embd_v_gqa && v_cur->ne[1] == n_tokens);
+        struct ggml_tensor * v_cur_t = ggml_transpose(ctx, v_cur);
+        cb(v_cur_t, "v_cur_t", il);
+
+        struct ggml_tensor * v_cache_view = ggml_view_2d(
+            ctx,
+            kv.v_l[il],
+            n_tokens,
+            n_embd_v_gqa,
+            n_ctx * ggml_element_size(kv.v_l[il]),
+            kv_head * ggml_element_size(kv.v_l[il])
+        );
+        cb(v_cache_view, "v_cache_view", il);
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur_t, v_cache_view));
+    }
 }
 
 static struct ggml_tensor * llm_build_norm(
@@ -5849,6 +5961,7 @@ static struct ggml_tensor * llm_build_ffn(
     return cur;
 }
 
+
 // if max_alibi_bias > 0 then apply ALiBi
 static struct ggml_tensor * llm_build_kqv(
         struct ggml_context * ctx,
@@ -5861,6 +5974,7 @@ static struct ggml_tensor * llm_build_kqv(
          struct ggml_tensor * q_cur,
          struct ggml_tensor * kq_mask,
          struct ggml_tensor * kq_pos,
+                    int32_t   seq_len,
                     int64_t   n_ctx,
                     int32_t   n_tokens,
                     int32_t   n_kv,
@@ -5884,28 +5998,89 @@ static struct ggml_tensor * llm_build_kqv(
                 0);
     cb(k, "k", il);
 
-    struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-    cb(kq, "kq", il);
+    // [seq_len, head_size, n_head]
+    struct ggml_tensor * v_t = (hparams.sparq && !hparams.sparq_default_layout)
+        ? nullptr
+        : ggml_view_3d(
+            ctx,
+            kv.v_l[il],
+            n_kv,
+            n_embd_head_v,
+            n_head_kv,
+            ggml_element_size(kv.v_l[il]) * n_ctx,
+            ggml_element_size(kv.v_l[il]) * n_ctx * n_embd_head_v,
+            0
+        );
+    if (v_t) { cb(v_t, "v_t", il); }
 
-    if (model.arch == LLM_ARCH_PHI2) {
-        // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
-        // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
-        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+    // [head_size, seq_len, n_head]
+    struct ggml_tensor * v = (hparams.sparq && !hparams.sparq_default_layout)
+        ? ggml_view_3d(
+            ctx,
+            kv.v_l[il],
+            n_embd_head_v,
+            n_kv,
+            n_head_kv,
+            ggml_row_size(kv.v_l[il]->type, n_embd_k_gqa),
+            ggml_row_size(kv.v_l[il]->type, n_embd_head_v),
+            0
+        )
+        : nullptr;
+    if (v) { cb(v, "v", il); }
+
+    // ** MOVED EARLIER **
+    GGML_ASSERT(kv.size == n_ctx);
+
+    struct ggml_tensor * kqv;
+
+    // ** SPARQ **
+    if (hparams.sparq && q->ne[1] == 1)
+    {
+        // [seq_len, head_size, n_head]
+        struct ggml_tensor * k_t = hparams.sparq_default_layout
+            ? 0
+            : ggml_view_3d(
+                ctx,
+                kv.k_t_l[il],
+                n_kv,
+                n_embd_head_k,
+                n_head_kv,
+                ggml_element_size(kv.k_t_l[il]) * n_ctx,
+                ggml_element_size(kv.k_t_l[il]) * n_ctx * n_embd_head_k,
+                0
+            );
+
+        kqv = ggml_sparq_attn(ctx, q, k, k_t, v, v_t, kq_mask, seq_len, hparams.sparq_k1, hparams.sparq_k2);
     }
+    // ** STANDARD ATTENTION **
+    else
+    {
+        if (v_t == nullptr) {  // when doing prefill with SparQ enabled
+            v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        }
 
-    if (model.arch == LLM_ARCH_GROK) {
-        // need to do the following:
-        // multiply by attn_output_multiplyer of 0.08838834764831845
-        // and then :
-        // kq = 30 * tanh(kq / 30)
-        // before the softmax below
+        struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+        cb(kq, "kq", il);
 
-        //try from phi2
-        //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        if (model.arch == LLM_ARCH_PHI2) {
+            // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
+            // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        }
 
-        kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
-        kq = ggml_scale(ctx, kq, 30);
-    }
+        if (model.arch == LLM_ARCH_GROK) {
+            // need to do the following:
+            // multiply by attn_output_multiplyer of 0.08838834764831845
+            // and then :
+            // kq = 30 * tanh(kq / 30)
+            // before the softmax below
+
+            //try from phi2
+            //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+
+            kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
+            kq = ggml_scale(ctx, kq, 30);
+        }
 
 #if defined(GGML_USE_KOMPUTE)
 #pragma message("TODO: ALiBi support in ggml_soft_max_ext is not implemented for Kompute")
@@ -5925,25 +6100,15 @@ static struct ggml_tensor * llm_build_kqv(
         cb(kq, "kq_soft_max", il);
     } else
 #endif
-    {
-        kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_pos, kq_scale, hparams.f_max_alibi_bias);
-        cb(kq, "kq_soft_max_ext", il);
+        {
+            kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_pos, kq_scale, hparams.f_max_alibi_bias);
+            cb(kq, "kq_soft_max_ext", il);
+        }
+
+
+        kqv = ggml_mul_mat(ctx, v_t, kq);
+        cb(kqv, "kqv", il);
     }
-
-    GGML_ASSERT(kv.size == n_ctx);
-
-    // split cached v into n_head heads
-    struct ggml_tensor * v =
-        ggml_view_3d(ctx, kv.v_l[il],
-                n_kv, n_embd_head_v, n_head_kv,
-                ggml_element_size(kv.v_l[il])*n_ctx,
-                ggml_element_size(kv.v_l[il])*n_ctx*n_embd_head_v,
-                0);
-    cb(v, "v", il);
-
-    struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
-    cb(kqv, "kqv", il);
-
     struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
     cb(kqv_merged, "kqv_merged", il);
 
@@ -5996,7 +6161,7 @@ static struct ggml_tensor * llm_build_kv(
     struct ggml_tensor * cur;
 
     cur  = llm_build_kqv(ctx, model, hparams, kv, graph, wo, wo_b,
-            q_cur, kq_mask, kq_pos, n_ctx, n_tokens, n_kv, kq_scale, cb, il);
+            q_cur, kq_mask, kq_pos, kv_head + 1, n_ctx, n_tokens, n_kv, kq_scale, cb, il);
     cb(cur, "kqv_out", il);
 
     return cur;
@@ -14017,6 +14182,10 @@ struct llama_context_params llama_context_default_params() {
         /*.offload_kqv                 =*/ true,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
+        /*.sparq                       =*/ false,
+        /*.sparq_default_layout        =*/ false,
+        /*.sparq_k1                    =*/ 32,
+        /*.sparq_k2                    =*/ 64,
     };
 
     return result;
@@ -14166,6 +14335,12 @@ struct llama_context * llama_new_context_with_model(
     }
 
     llama_context * ctx = new llama_context(*model);
+
+    // Hack to plumb in sparq params for graph creation
+    model->hparams.sparq = params.sparq;
+    model->hparams.sparq_default_layout = params.sparq_default_layout;
+    model->hparams.sparq_k1 = params.sparq_k1;
+    model->hparams.sparq_k2 = params.sparq_k2;
 
     const auto & hparams = model->hparams;
     auto       & cparams = ctx->cparams;
@@ -14860,6 +15035,15 @@ int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx) {
 
 void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
+}
+
+void llama_kv_cache_clear_tg_tokens(struct llama_context * ctx, int start) {
+    llama_kv_cache_clear_tg_tokens(ctx->kv_self, start);
+}
+
+void llama_kv_cache_extend_prompt(struct llama_context * ctx, int current_length, int target_length, int n_batch, int n_threads) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+    llama_kv_cache_extend_prompt(ctx->kv_self, current_length, target_length, n_batch, n_threads, ctx->model.hparams.n_layer);
 }
 
 bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {

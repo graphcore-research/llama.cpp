@@ -418,6 +418,9 @@ extern "C" {
 
         GGML_OP_DUP,
         GGML_OP_ADD,
+        // MODIFIED
+        GGML_OP_ADD_NOTHING,
+        GGML_OP_SPARQ_ATTN,
         GGML_OP_ADD1,
         GGML_OP_ACC,
         GGML_OP_SUB,
@@ -1806,6 +1809,22 @@ extern "C" {
             struct ggml_tensor  * ph);
 
     // custom operators
+    // MODIFIED
+    GGML_API struct ggml_tensor * ggml_add_nothing(
+            struct ggml_context * ctx,
+            struct ggml_tensor * a);
+
+    GGML_API struct ggml_tensor * ggml_sparq_attn(
+            struct ggml_context * ctx,
+            struct ggml_tensor * q,
+            struct ggml_tensor * K,
+            struct ggml_tensor * K_t,
+            struct ggml_tensor * V,
+            struct ggml_tensor * V_t,
+            struct ggml_tensor * kq_mask,
+            int seq_len,
+            int k1,
+            int k2);
 
     typedef void (*ggml_unary_op_f32_t) (const int, float *, const float *);
     typedef void (*ggml_binary_op_f32_t)(const int, float *, const float *, const float *);
