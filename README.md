@@ -1,4 +1,24 @@
-# llama.cpp
+# llama.cpp (with SparQ for benchmarking)
+
+This is a fork of [ggerganov/llama.cpp](https://github.com/ggerganov/llama.cpp), demonstrating a proof-of-concept SparQ implementation, for CPU benchmarking.
+
+See the [diff](https://github.com/graphcore-research/sparq-llama.cpp/compare/master..sparq).
+
+After downloading Llama 2 -> `models/llama-2-7b.Q8_0.gguf` (https://huggingface.co/TheBloke/Llama-2-7B-GGUF):
+
+```sh
+./check_sparq.sh
+./check_sparq.sh --half         # requires AVX512
+
+./benchmark_sparq.sh            # requires AVX512 by default
+./benchmark_sparq.sh --profile  # (likewise)
+```
+
+_The remainder of this README is from the original repository; note that our modifications will have broken some functionality._
+
+---
+
+## llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
