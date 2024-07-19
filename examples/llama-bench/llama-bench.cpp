@@ -1404,66 +1404,6 @@ int main(int argc, char ** argv) {
         }
     }
 
-
-
-
-    // for (const auto & inst : params_instances) {
-    //     // keep the same model between tests when possible
-    //     if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
-    //         if (lmodel) {
-    //             llama_free_model(lmodel);
-    //         }
-
-    //         lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
-    //         if (lmodel == NULL) {
-    //             fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
-    //             return 1;
-    //         }
-    //         prev_inst = &inst;
-    //     }
-
-    //     llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
-    //     if (ctx == NULL) {
-    //         fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
-    //         llama_free_model(lmodel);
-    //         return 1;
-    //     }
-
-    //     test t(inst, lmodel, ctx);
-
-    //     llama_kv_cache_clear(ctx);
-
-    //     // warmup run
-    //     if (t.n_prompt > 0) {
-    //         //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-    //         test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-    //     }
-    //     if (t.n_gen > 0) {
-    //         test_gen(ctx, 1, 0, t.n_threads);
-    //     }
-
-    //     for (int i = 0; i < params.reps; i++) {
-    //         llama_kv_cache_clear(ctx);
-
-    //         uint64_t t_start = get_time_ns();
-    //         if (t.n_prompt > 0) {
-    //             test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-    //         }
-    //         if (t.n_gen > 0) {
-    //             test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
-    //         }
-
-    //         uint64_t t_ns = get_time_ns() - t_start;
-    //         t.samples_ns.push_back(t_ns);
-    //     }
-
-    //     p->print_test(t);
-
-    //     llama_print_timings(ctx);
-
-    //     llama_free(ctx);
-    // }
-
     llama_free_model(lmodel);
 
     p->print_footer();
