@@ -14,6 +14,8 @@ After downloading Llama 2 -> `models/llama-2-7b.Q8_0.gguf` (https://huggingface.
 ./benchmark_sparq.sh --profile  # (likewise)
 ```
 
+Our modifications are made under the same MIT License as llama.cpp, with Graphcore Ltd holding the copyright for our changes.
+
 _The remainder of this README is from the original repository; note that our modifications will have broken some functionality._
 
 ---
