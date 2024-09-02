@@ -6,11 +6,11 @@
 void print_tensor_structure(const ggml_tensor *t, std::string name) {
     printf("\n%s:\n", name.c_str());
     printf(
-        "    elements (ne): %lu x %lu x %lu x %lu\n",
-        t->ne[0],
-        t->ne[1],
-        t->ne[2],
-        t->ne[3]
+        "    elements (ne): %lld x %lld x %lld x %lld\n",
+        (long long)t->ne[0],
+        (long long)t->ne[1],
+        (long long)t->ne[2],
+        (long long)t->ne[3]
     );
     printf(
         "       bytes (nb): %lu x %lu x %lu x %lu\n\n",
