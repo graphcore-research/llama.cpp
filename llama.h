@@ -537,7 +537,6 @@ extern "C" {
         struct llama_context * ctx, 
         int current_length, 
         int target_length, 
-        int n_batch, 
         int n_threads);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
