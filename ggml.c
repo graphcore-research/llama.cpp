@@ -7065,7 +7065,6 @@ struct ggml_tensor * ggml_sparq_attn(
             int k1,
             int k2)
 {
-    // Check if q is contiguous? result should be (head_dim, 1, heads, batch)
     struct ggml_tensor * result = ggml_dup_tensor(ctx, q);
 
     result->op = GGML_OP_SPARQ_ATTN;
@@ -16147,7 +16146,6 @@ static void ggml_compute_forward_sparq_attn(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst)
 {
-    // What does this do?
     if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }
