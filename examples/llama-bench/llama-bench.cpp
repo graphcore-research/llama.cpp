@@ -1344,7 +1344,7 @@ int main(int argc, char ** argv) {
             if (kv_cache_token_count < t.n_prompt) {
                 // extend prompt length
                 uint64_t prompt_t_start = get_time_ns();
-                llama_kv_cache_extend_prompt(ctx, kv_cache_token_count, t.n_prompt, t.n_batch, t.n_threads);
+                llama_kv_cache_extend_prompt(ctx, kv_cache_token_count, t.n_prompt, t.n_threads);
                 uint64_t prompt_t_ns = get_time_ns() - prompt_t_start;
                 printf(
                     "Extended prompt length by %d (new prompt length = %d) in %6.9lf seconds\n",
